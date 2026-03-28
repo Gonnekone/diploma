@@ -1,0 +1,37 @@
+version: '3.9'
+
+services:
+  app:
+    image: gonnekone/videoapp:latest
+    restart: unless-stopped
+    environment:
+      - ENVIRONMENT=PRODUCTION
+    command: ["--addr", ":8080"]
+    expose:
+      - "8080"
+
+  turn:
+    image: gonnekone/turn:latest
+    restart: unless-stopped
+    network_mode: host
+    command: [
+      "-public-ip", "158.160.8.131",
+      "-port", "3478",
+      "-users", "gonnekone=gonnekone",
+      "-realm", "vc.158.160.8.131.sslip.io"
+    ]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

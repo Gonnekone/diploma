@@ -1,0 +1,4 @@
+vc.158.160.8.131.sslip.io {
+    reverse_proxy app:8080
+    encode zstd gzip
+}

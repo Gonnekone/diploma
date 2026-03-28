@@ -1,0 +1,7 @@
+.DS_Store
+go.sum
+noisecanceletionmodel/venv
+noisecanceletionmodel/test_results
+noisecanceletionmodel/speech-noise-dataset.zip
+noisecanceletionmodel/data
+.idea

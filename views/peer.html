@@ -1,0 +1,82 @@
+{{/* views/peer.html */}}
+
+<div id="noperm" class="columns">
+    <div class="column notif">
+        <article class="notification is-link">
+            Camera and microphone permissions are needed to join the room. <br>
+            Otherwise, you can join the <a href="{{ .StreamLink }}"><strong>stream</strong></a> as viewer.
+        </article>
+    </div>
+</div>
+
+<div id="peers">
+    <!-- Весь ряд видео+чат. Счётчик кладём поверх этого ряда (overlay). -->
+    <div class="video-chat-row">
+        <div class="columns is-multiline" id="videos">
+            <!-- self-view слева -->
+            <div class="column is-6 peer">
+                <video id="localVideo" class="video-area mirror" autoplay muted></video>
+                <div class="video-options">
+                    <div class="viewer viewer-overlay">
+                        <p class="icon-users" id="viewer-count"></p>
+                    </div>
+                    <div id="chat">
+                        <h3 class="chat-title">Chat</h3>
+
+                        <article class="message chat">
+                            <div id="chat-content">
+                                <div class="body">
+                                    <div id="log"></div>
+                                </div>
+
+                                <form id="form" class="chat-form" autocomplete="off">
+                                    <input class="input chat-input" id="msg" type="text" placeholder="type message..."/>
+                                </form>
+                            </div>
+                        </article>
+                    </div>
+                </div>
+            </div>
+
+
+            <!-- чат справа на том же уровне -->
+            <div class="column is-6">
+                {{ template "partials/chat" . }}
+            </div>
+
+            <!-- уведомления ниже, как и раньше -->
+            <div id="noone" class="column is-6 notif">
+                <article id="noonein" class="notification is-primary is-light">
+                    <button class="delete"></button>
+                    No other streamer is in the room. <br>
+                    Share your room link to invite your friends.
+                </article>
+                <article class="notification is-primary is-light">
+                    <button class="delete"></button>
+                    Share your stream link with your viewers.
+                </article>
+            </div>
+            <div id="nocon" class="column is-6 notif">
+                <article class="notification is-danger">
+                    Connection is closed!<br>
+                    Please refresh the page.
+                </article>
+            </div>
+        </div>
+
+        <!-- счётчик поверх ряда, справа, на линии верха видео/чата -->
+        <!--		<div class="viewer viewer-overlay">-->
+        <!--			<p class="icon-users" id="viewer-count"></p>-->
+        <!--		</div>-->
+    </div>
+</div>
+
+<script>
+    let RoomWebsocketAddr = "{{.RoomWebsocketAddr}}"
+    let ChatWebsocketAddr = "{{.ChatWebsocketAddr}}"
+    let ViewerWebsocketAddr = "{{.ViewerWebsocketAddr}}"
+</script>
+<script src="/javascript/peer.js"></script>
+<script src="/javascript/chat.js"></script>
+<script src="/javascript/viewer.js"></script>
+<script src="//cdn.jsdelivr.net/npm/sweetalert2@11"></script>

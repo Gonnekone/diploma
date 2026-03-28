@@ -1,0 +1,229 @@
+@import "bulma/css/bulma.min.css";
+@import "fonts.css";
+
+html {
+    height: 100%;
+}
+
+.title {
+    font-size: xx-large;
+}
+
+.container {
+    width: 70%;
+}
+
+hr {
+    height: 1px;
+    background-color: #a8b4e2;
+    border: none;
+}
+
+body {
+    background-color: #a8b4e2;
+    min-height: 100%;
+    font-size: large;
+}
+
+footer {
+    color: #a8b4e2;
+    font-size: medium;
+}
+
+footer .content {
+    margin-left: 10px;
+}
+
+#peers {
+    display: none;
+    padding-right: 5px;
+}
+
+.mirror {
+    -o-transform: scaleX(-1);
+    -moz-transform: scaleX(-1);
+    -webkit-transform: scaleX(-1);
+    -ms-transform: scaleX(-1);
+    transform: scaleX(-1);
+}
+
+video {
+    border-radius: 1%;
+    max-height: 50vh;
+    margin: 10px;
+    background-color: #a8b4e2;
+    box-shadow: 5px 5px #4d27a3;
+}
+
+.video-options {
+    display: flex;
+    justify-content: space-between;
+    gap: 200px;
+}
+
+.notif {
+    margin-top: 30px;
+    margin-bottom: 30px;
+    justify-content: center;
+    display: grid;
+    align-items: center;
+}
+
+/* CHAT: контейнер чата (заголовок + рамка) */
+#chat {
+    bottom: 20px;
+    right: 50px;
+    min-width: 600px;
+    z-index: 99;
+    display: flex;
+    flex-direction: column;
+}
+
+/* CHAT: рамка в цвет тени видео */
+article.message.chat {
+    border: 2px solid #4d27a3;
+    border-radius: 6px;
+    box-shadow: 5px 5px #a8b4e2;
+}
+
+/* CHAT: заголовок вне рамки */
+.chat-title {
+    margin: 0 0 6px 6px;
+    font-weight: 600;
+}
+
+/* CHAT: единый внутренний отступ (сверху/снизу/по бокам одинаковый)
+        + промежуток между лентой и инпутом */
+#chat-content {
+    display: flex;
+    flex-direction: column;
+    padding: 10px; /* одинаковый отступ со всех сторон */
+    gap: 10px; /* расстояние между лентой сообщений и полем ввода */
+}
+
+/* CHAT: лента сообщений
+   - без скругления углов
+   - убран лишний нижний padding, чтобы скролл не уезжал ниже последнего сообщения */
+#chat .body {
+    flex: 1 1 auto;
+    display: block;
+    overflow-y: auto;
+    height: 30vh;
+    margin: 0; /* был margin: 10px */
+    padding: 0 6px 0 0; /* небольшой правый отступ под скроллбар */
+    border-radius: 0; /* без скругления */
+    word-wrap: break-word;
+}
+
+/* больше не добавляем искусственный зазор после последнего сообщения */
+#log > div:last-child {
+    margin-bottom: 0;
+}
+
+/* CHAT: форма без кнопки; инпут почти во всю ширину */
+.chat-form {
+    padding: 0;
+}
+
+.chat-input {
+    width: 100%;
+}
+
+.peer {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+#nocon {
+    display: none;
+}
+
+#noperm, #noonestream, #nostream {
+    justify-content: center;
+    display: grid;
+    height: 40vh;
+}
+
+.viewer {
+    margin-bottom: 20px;
+    display: grid;
+    justify-content: end;
+}
+
+/* красная точка больше не используется */
+#chat-alert {
+    display: none !important;
+    width: 12px;
+    height: 12px;
+}
+
+@media screen and (max-width: 850px) {
+    .container {
+        width: 95%;
+    }
+
+    #chat {
+        width: 100%;
+        right: 0;
+        bottom: 0;
+    }
+
+    article.message.chat {
+        border-radius: 0;
+    }
+}
+
+@media screen and (min-width: 850px) and (max-width: 1200px) {
+    .container {
+        width: 80%;
+    }
+
+    .chat {
+        width: 40%;
+    }
+
+    .navbar-item {
+        display: flex;
+    }
+
+    .navbar, .navbar-menu, .navbar-start, .navbar-end {
+        align-items: stretch;
+        display: flex;
+        padding: 0;
+    }
+
+    .navbar-menu {
+        flex-grow: 1;
+        flex-shrink: 0;
+    }
+
+    .navbar-start {
+        justify-content: flex-start;
+        margin-right: auto;
+    }
+
+    .navbar-end {
+        justify-content: flex-end;
+        margin-left: auto;
+    }
+
+    .navbar .container {
+        display: flex;
+    }
+
+    .navbar-item {
+        display: flex;
+        align-items: center;
+    }
+}
+
+@media screen and (min-width: 1300px) {
+    .container {
+        width: 70%;
+    }
+
+    #chat {
+        width: 23%;
+    }
+}
