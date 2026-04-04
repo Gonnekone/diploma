@@ -20,6 +20,8 @@ EXCLUDES=(
     "noisecanceletionmodel/data"
     "noisecanceletionmodel/venv"
     "noisecanceletionmodel/speech-noise-dataset.zip"
+    "noisecanceletionmodel/test_results"
+    "noisecanceletionmodel/modeldata"
     "views"
 )
 
