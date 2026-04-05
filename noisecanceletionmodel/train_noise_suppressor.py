@@ -42,7 +42,7 @@ device = torch.device(
 print("Using device:", device)
 
 class AudioDataset(Dataset):
-    def __init__(self, mode="train"):
+    def __init__(self):
 
         clean = sorted([os.path.join(CLEAN_DIR, f) for f in os.listdir(CLEAN_DIR) if f.endswith(".wav")])
         noisy = sorted([os.path.join(NOISY_DIR, f) for f in os.listdir(NOISY_DIR) if f.endswith(".wav")])
@@ -50,13 +50,9 @@ class AudioDataset(Dataset):
 
         split = int(len(clean) * 0.9)
 
-        if mode == "train":
-            self.clean = clean[:split]
-            self.noisy = noisy[:split]
-        else:
-            self.clean = clean[split:]
-            self.noisy = noisy[split:]
-
+        self.clean = clean[:split]
+        self.noisy = noisy[:split]
+    
         self.spec = Spectrogram(
             n_fft=FRAME_LENGTH,
             hop_length=HOP_LENGTH,
@@ -188,7 +184,7 @@ def train():
     losses = []
     epoch_losses = []
 
-    print("\n🚀 Training started\n")
+    print("\nTraining started\n")
 
     for epoch in range(EPOCHS):
 
@@ -244,21 +240,6 @@ def train():
 
             loss_spec = torch.mean((pred_mag - clean_mag) ** 2)
 
-            def si_snr(clean, pred):
-                clean = clean - clean.mean(dim=-1, keepdim=True)
-                pred = pred - pred.mean(dim=-1, keepdim=True)
-
-                s_target = (torch.sum(pred * clean, dim=-1, keepdim=True) * clean) / (
-                        torch.sum(clean ** 2, dim=-1, keepdim=True) + 1e-6
-                )
-
-                e_noise = pred - s_target
-
-                return 10 * torch.log10(
-                    torch.sum(s_target ** 2, dim=-1) /
-                    (torch.sum(e_noise ** 2, dim=-1) + 1e-6)
-                )
-
             loss_snr = -torch.mean(si_snr(clean_wave, pred_wave))
 
             loss = loss_mask + 0.3 * loss_spec + 0.5 * loss_snr
@@ -287,7 +268,7 @@ def train():
         print(f"Epoch {epoch+1} | loss {avg:.4f} | time {time.time()-start:.1f}s")
 
     torch.save(model.state_dict(), "modeldata/noise_suppressor.pth")
-    print("\n💾 Model saved")
+    print("\nModel saved")
 
     model.eval().cpu()
 
@@ -305,7 +286,7 @@ def train():
         opset_version=17
     )
 
-    print("✅ ONNX exported")
+    print("ONNX exported")
 
     plot_data = epoch_losses if PLOT_BY == "epoch" else losses
 
@@ -317,7 +298,7 @@ def train():
     plt.grid()
     plt.savefig("modeldata/training_loss.png")
 
-    print("📊 Loss graph saved")
+    print("Loss graph saved")
 
 
 if __name__ == "__main__":
