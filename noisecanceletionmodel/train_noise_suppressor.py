@@ -50,8 +50,12 @@ class AudioDataset(Dataset):
 
         split = int(len(clean) * 0.9)
 
-        self.clean = clean[:split]
-        self.noisy = noisy[:split]
+        if mode == "train":
+            self.clean = clean[:split]
+            self.noisy = noisy[:split]
+        else:
+            self.clean = clean[split:]
+            self.noisy = noisy[split:]
     
         self.spec = Spectrogram(
             n_fft=FRAME_LENGTH,
@@ -277,24 +281,6 @@ def train():
     torch.save(model.state_dict(), "modeldata/noise_suppressor.pth")
     print("\nModel saved")
 
-    model.eval().cpu()
-
-    dummy = torch.randn(
-        1,
-        1,
-        FRAME_LENGTH // 2 + 1,
-        100
-    )
-
-    torch.onnx.export(
-        model,
-        dummy,
-        "modeldata/noise_suppressor.onnx",
-        opset_version=17
-    )
-
-    print("ONNX exported")
-
     plot_data = epoch_losses if PLOT_BY == "epoch" else losses
 
     plt.figure(figsize=(12, 6))
@@ -360,6 +346,24 @@ def train():
     plt.ylabel("Частота")
     plt.savefig("modeldata/mask.png")
     print("Mask saved")
+
+    model.eval().cpu()
+
+    dummy = torch.randn(
+        1,
+        1,
+        FRAME_LENGTH // 2 + 1,
+        100
+    )
+
+    torch.onnx.export(
+        model,
+        dummy,
+        "modeldata/noise_suppressor.onnx",
+        opset_version=17
+    )
+
+    print("ONNX exported")
 
 
 if __name__ == "__main__":
