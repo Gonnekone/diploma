@@ -42,7 +42,7 @@ device = torch.device(
 print("Using device:", device)
 
 class AudioDataset(Dataset):
-    def __init__(self):
+    def __init__(self, mode="train"):
 
         clean = sorted([os.path.join(CLEAN_DIR, f) for f in os.listdir(CLEAN_DIR) if f.endswith(".wav")])
         noisy = sorted([os.path.join(NOISY_DIR, f) for f in os.listdir(NOISY_DIR) if f.endswith(".wav")])
