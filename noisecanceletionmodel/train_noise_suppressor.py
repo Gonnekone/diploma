@@ -183,6 +183,9 @@ def train():
 
     losses = []
     epoch_losses = []
+    mask_losses = []
+    spec_losses = []
+    snr_losses = []
 
     print("\nTraining started\n")
 
@@ -242,6 +245,10 @@ def train():
 
             loss_snr = -torch.mean(si_snr(clean_wave, pred_wave))
 
+            mask_losses.append(loss_mask.item())
+            spec_losses.append(loss_spec.item())
+            snr_losses.append(-loss_snr.item())
+
             loss = loss_mask + 0.3 * loss_spec + 0.5 * loss_snr
 
             loss.backward()
@@ -299,6 +306,60 @@ def train():
     plt.savefig("modeldata/training_loss.png")
 
     print("Loss graph saved")
+
+    # График трёх компонентов лосса
+    plt.figure(figsize=(12, 6))
+    plt.plot(mask_losses, label="Mask MSE")
+    plt.plot(spec_losses, label="Spectrogram MSE")
+    plt.plot(snr_losses, label="SI-SNR")
+    plt.title("Loss Components")
+    plt.xlabel("Batch")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.grid()
+    plt.savefig("modeldata/loss_components.png")
+
+    # Спектрограммы на одном тестовом примере
+    model.eval()
+    sample_noisy, sample_clean = next(iter(DataLoader(AudioDataset("val"), batch_size=1)))
+    sample_noisy = sample_noisy.to(device)
+    sample_clean = sample_clean.to(device)
+
+    with torch.no_grad():
+        mask = model(sample_noisy)
+
+    noisy_mag = torch.exp(sample_noisy.squeeze().cpu())
+    clean_mag = torch.exp(sample_clean.squeeze().cpu())
+    pred_mag = noisy_mag * mask.squeeze().cpu()
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    axes[0].imshow(noisy_mag.numpy(), origin="lower", aspect="auto")
+    axes[0].set_title("Зашумлённый сигнал")
+    axes[0].set_xlabel("Время")
+    axes[0].set_ylabel("Частота")
+
+    axes[1].imshow(clean_mag.numpy(), origin="lower", aspect="auto")
+    axes[1].set_title("Чистый сигнал")
+    axes[1].set_xlabel("Время")
+
+    axes[2].imshow(pred_mag.numpy(), origin="lower", aspect="auto")
+    axes[2].set_title("Восстановленный сигнал")
+    axes[2].set_xlabel("Время")
+
+    plt.tight_layout()
+    plt.savefig("modeldata/spectrograms.png")
+    print("Spectrograms saved")
+
+    # График маски
+    plt.figure(figsize=(12, 5))
+    plt.imshow(mask.squeeze().cpu().numpy(), origin="lower", aspect="auto", vmin=0, vmax=1)
+    plt.colorbar(label="Mask value")
+    plt.title("Предсказанная маска")
+    plt.xlabel("Время")
+    plt.ylabel("Частота")
+    plt.savefig("modeldata/mask.png")
+    print("Mask saved")
 
 
 if __name__ == "__main__":
