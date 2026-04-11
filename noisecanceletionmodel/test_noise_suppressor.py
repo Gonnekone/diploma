@@ -193,7 +193,6 @@ def test():
             noisy_mag_plot = noisy_mag.squeeze(0).cpu()
             pred_mag_plot = pred_mag.squeeze(0).cpu()
 
-            # общий диапазон для честного сравнения
             vmin = min(clean_mag.min(), noisy_mag_plot.min(), pred_mag_plot.min()).item()
             vmax = max(clean_mag.max(), noisy_mag_plot.max(), pred_mag_plot.max()).item()
 
