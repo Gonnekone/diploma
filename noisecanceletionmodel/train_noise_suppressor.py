@@ -2,16 +2,14 @@ import os
 import random
 import time
 
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchaudio
 import torchaudio.functional as F
-
 from torch.utils.data import Dataset, DataLoader
 from torchaudio.transforms import Spectrogram, Resample
-
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 SAMPLE_RATE = 48000
@@ -41,6 +39,7 @@ device = torch.device(
 
 print("Using device:", device)
 
+
 class AudioDataset(Dataset):
     def __init__(self, mode="train"):
 
@@ -56,7 +55,7 @@ class AudioDataset(Dataset):
         else:
             self.clean = clean[split:]
             self.noisy = noisy[split:]
-    
+
         self.spec = Spectrogram(
             n_fft=FRAME_LENGTH,
             hop_length=HOP_LENGTH,
@@ -142,7 +141,6 @@ class NoiseSuppressor(nn.Module):
 
 
 def loss_fn(noisy_log, clean_log, mask, noisy_wave, clean_wave, pred_wave):
-
     noisy_mag = torch.exp(noisy_log.squeeze(1))
     clean_mag = torch.exp(clean_log.squeeze(1))
 
@@ -155,6 +153,7 @@ def loss_fn(noisy_log, clean_log, mask, noisy_wave, clean_wave, pred_wave):
     snr_loss = -torch.mean(si_snr(clean_wave, pred_wave))
 
     return loss_mask + 0.3 * loss_spec + 0.5 * snr_loss
+
 
 def si_snr(clean, pred):
     clean = clean - clean.mean(dim=-1, keepdim=True)
@@ -171,8 +170,8 @@ def si_snr(clean, pred):
         (torch.sum(e_noise ** 2, dim=-1) + 1e-6)
     )
 
-def train():
 
+def train():
     ds = AudioDataset("train")
     dl = DataLoader(ds, batch_size=BATCH_SIZE, shuffle=True)
 
@@ -266,7 +265,7 @@ def train():
 
             total_loss += loss.item()
 
-            progress.set_description(f"Epoch {epoch+1}")
+            progress.set_description(f"Epoch {epoch + 1}")
             progress.set_postfix(loss=loss.item())
 
         avg = total_loss / len(dl)
@@ -276,7 +275,7 @@ def train():
 
         scheduler.step(avg)
 
-        print(f"Epoch {epoch+1} | loss {avg:.4f} | time {time.time()-start:.1f}s")
+        print(f"Epoch {epoch + 1} | loss {avg:.4f} | time {time.time() - start:.1f}s")
 
     torch.save(model.state_dict(), "modeldata/noise_suppressor.pth")
     print("\nModel saved")
@@ -292,55 +291,6 @@ def train():
     plt.savefig("modeldata/training_loss.png")
 
     print("Loss graph saved")
-
-    # График трёх компонентов лосса
-    plt.figure(figsize=(12, 6))
-    plt.plot(mask_losses, label="Mask MSE")
-    plt.plot(spec_losses, label="Spectrogram MSE")
-    plt.plot(snr_losses, label="SI-SNR")
-    plt.title("Loss Components")
-    plt.xlabel("Batch")
-    plt.ylabel("Loss")
-    plt.legend()
-    plt.grid()
-    plt.savefig("modeldata/loss_components.png")
-
-    # Спектрограммы на одном тестовом примере
-    model.eval()
-    sample_noisy, sample_clean = next(iter(DataLoader(AudioDataset("val"), batch_size=1)))
-    sample_noisy = sample_noisy.to(device)
-    sample_clean = sample_clean.to(device)
-
-    with torch.no_grad():
-        mask = model(sample_noisy)
-
-    noisy_mag = torch.exp(sample_noisy.squeeze().cpu())
-    clean_mag = torch.exp(sample_clean.squeeze().cpu())
-    pred_mag = noisy_mag * mask.squeeze().cpu()
-
-    freq_limit = 60
-    noisy_mag_limited = noisy_mag[:freq_limit, :]
-    clean_mag_limited = clean_mag[:freq_limit, :]
-    pred_mag_limited = pred_mag[:freq_limit, :]
-
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-
-    axes[0].imshow(noisy_mag_limited.numpy(), origin="lower", aspect="auto")
-    axes[0].set_title("Зашумлённый сигнал")
-    axes[0].set_xlabel("Время")
-    axes[0].set_ylabel("Частота")
-
-    axes[1].imshow(clean_mag_limited.numpy(), origin="lower", aspect="auto")
-    axes[1].set_title("Чистый сигнал")
-    axes[1].set_xlabel("Время")
-
-    axes[2].imshow(pred_mag_limited.numpy(), origin="lower", aspect="auto")
-    axes[2].set_title("Восстановленный сигнал")
-    axes[2].set_xlabel("Время")
-
-    plt.tight_layout()
-    plt.savefig("modeldata/spectrograms.png")
-    print("Spectrograms saved")
 
     model.eval().cpu()
 

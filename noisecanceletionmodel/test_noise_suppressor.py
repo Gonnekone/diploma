@@ -1,7 +1,8 @@
 import os
+
+import matplotlib.pyplot as plt
 import torch
 import torchaudio
-
 from torch.utils.data import Dataset, DataLoader
 from torchaudio.transforms import Resample
 
@@ -29,6 +30,7 @@ device = torch.device(
 print("Using device:", device)
 
 window = torch.hann_window(FRAME_LENGTH).to(device)
+
 
 class TestDataset(Dataset):
 
@@ -99,7 +101,6 @@ class NoiseSuppressor(torch.nn.Module):
         )
 
     def forward(self, x):
-
         x = self.encoder(x)
 
         B, C, F, T = x.shape
@@ -121,7 +122,6 @@ def compute_snr(clean, pred):
 
 
 def test():
-
     dataset = TestDataset()
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
@@ -184,6 +184,46 @@ def test():
             torchaudio.save(f"{OUTPUT_DIR}/sample_{i}_denoised.wav", audio.squeeze(0).cpu(), SAMPLE_RATE)
 
             print(f"Saved sample {i}")
+
+            clean_mag = torch.abs(torch.stft(
+                clean.squeeze(1), n_fft=FRAME_LENGTH, hop_length=HOP_LENGTH,
+                window=window, return_complex=True
+            )).squeeze(0).cpu()
+
+            noisy_mag_plot = noisy_mag.squeeze(0).cpu()
+            pred_mag_plot = pred_mag.squeeze(0).cpu()
+
+            # общий диапазон для честного сравнения
+            vmin = min(clean_mag.min(), noisy_mag_plot.min(), pred_mag_plot.min()).item()
+            vmax = max(clean_mag.max(), noisy_mag_plot.max(), pred_mag_plot.max()).item()
+
+            frames_per_sec = SAMPLE_RATE / HOP_LENGTH
+            duration = clean_mag.shape[1] / frames_per_sec
+
+            fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+            for ax, data, title in zip(
+                    axes,
+                    [noisy_mag_plot, clean_mag, pred_mag_plot],
+                    ["Зашумлённый сигнал", "Чистый сигнал", "Восстановленный сигнал"]
+            ):
+                im = ax.imshow(
+                    data.numpy(), origin="lower", aspect="auto",
+                    vmin=vmin, vmax=vmax,
+                    extent=[0, duration, 0, SAMPLE_RATE // 2]
+                )
+                ax.set_title(title)
+                ax.set_xlabel("Время (сек)")
+                ax.set_ylabel("Частота (Гц)")
+                ax.set_ylim(0, 8000)  # ограничиваем до 8 кГц — там вся речь
+
+            plt.colorbar(im, ax=axes[-1], label="Амплитуда")
+            plt.suptitle(f"Sample {i}")
+            plt.tight_layout()
+            plt.savefig(f"{OUTPUT_DIR}/sample_{i}_spectrograms.png")
+            plt.close()
+
+            print(f"Saved spectrograms for sample {i}")
 
     print("\n====================")
     print("RESULTS")
