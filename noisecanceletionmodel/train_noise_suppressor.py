@@ -18,7 +18,7 @@ SAMPLE_RATE = 48000
 FRAME_LENGTH = 512
 HOP_LENGTH = 128
 
-EPOCHS = 30
+EPOCHS = 40
 BATCH_SIZE = 8
 LR = 3e-4
 
@@ -318,34 +318,29 @@ def train():
     clean_mag = torch.exp(sample_clean.squeeze().cpu())
     pred_mag = noisy_mag * mask.squeeze().cpu()
 
+    freq_limit = 60
+    noisy_mag_limited = noisy_mag[:freq_limit, :]
+    clean_mag_limited = clean_mag[:freq_limit, :]
+    pred_mag_limited = pred_mag[:freq_limit, :]
+
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-    axes[0].imshow(noisy_mag.numpy(), origin="lower", aspect="auto")
+    axes[0].imshow(noisy_mag_limited.numpy(), origin="lower", aspect="auto")
     axes[0].set_title("Зашумлённый сигнал")
     axes[0].set_xlabel("Время")
     axes[0].set_ylabel("Частота")
 
-    axes[1].imshow(clean_mag.numpy(), origin="lower", aspect="auto")
+    axes[1].imshow(clean_mag_limited.numpy(), origin="lower", aspect="auto")
     axes[1].set_title("Чистый сигнал")
     axes[1].set_xlabel("Время")
 
-    axes[2].imshow(pred_mag.numpy(), origin="lower", aspect="auto")
+    axes[2].imshow(pred_mag_limited.numpy(), origin="lower", aspect="auto")
     axes[2].set_title("Восстановленный сигнал")
     axes[2].set_xlabel("Время")
 
     plt.tight_layout()
     plt.savefig("modeldata/spectrograms.png")
     print("Spectrograms saved")
-
-    # График маски
-    plt.figure(figsize=(12, 5))
-    plt.imshow(mask.squeeze().cpu().numpy(), origin="lower", aspect="auto", vmin=0, vmax=1)
-    plt.colorbar(label="Mask value")
-    plt.title("Предсказанная маска")
-    plt.xlabel("Время")
-    plt.ylabel("Частота")
-    plt.savefig("modeldata/mask.png")
-    print("Mask saved")
 
     model.eval().cpu()
 
