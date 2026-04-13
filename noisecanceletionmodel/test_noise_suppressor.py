@@ -206,9 +206,9 @@ def test():
                     [noisy_mag_plot, clean_mag, pred_mag_plot],
                     ["Зашумлённый сигнал", "Чистый сигнал", "Восстановленный сигнал"]
             ):
-                im = ax.imshow(
+                ax.imshow(
                     data.numpy(), origin="lower", aspect="auto",
-                    vmin=vmin, vmax=vmax,
+                    vmin=vmin, vmax=vmax, cmap='terrain',
                     extent=[0, duration, 0, SAMPLE_RATE // 2]
                 )
                 ax.set_title(title)
