@@ -200,7 +200,7 @@ def test():
             frames_per_sec = SAMPLE_RATE / HOP_LENGTH
             duration = clean_mag.shape[1] / frames_per_sec
 
-            fig, axes = plt.subplots(3, 1, figsize=(12, 12))
+            fig, axes = plt.subplots(3, 1, figsize=(12, 6))
 
             for ax, data, title in zip(
                     axes,
@@ -215,7 +215,7 @@ def test():
                 ax.set_title(title)
                 ax.set_xlabel("Время (сек)")
                 ax.set_ylabel("Частота (Гц)")
-                ax.set_ylim(0, 8000)
+                ax.set_ylim(0, 2000)
 
             plt.suptitle(f"Sample {i}")
             plt.tight_layout()
