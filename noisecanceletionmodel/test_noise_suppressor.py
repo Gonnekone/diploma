@@ -132,6 +132,7 @@ def test():
 
     total_mse = 0
     total_snr = 0
+    total_snr_noisy = 0
 
     print("\nTesting model...\n")
 
@@ -168,15 +169,15 @@ def test():
             hop_length=HOP_LENGTH,
             window=window,
             length=TARGET_LEN
-        )
-
-        audio = audio.unsqueeze(0)
+        ).unsqueeze(0)
 
         mse = torch.mean((audio - clean) ** 2).item()
         snr = compute_snr(clean, audio).item()
+        snr_noisy = compute_snr(clean, noisy).item()
 
         total_mse += mse
         total_snr += snr
+        total_snr_noisy += snr_noisy
 
         if i < 5:
             torchaudio.save(f"{OUTPUT_DIR}/sample_{i}_clean.wav", clean.squeeze(0).cpu(), SAMPLE_RATE)
@@ -227,8 +228,10 @@ def test():
     print("RESULTS")
     print("====================\n")
 
-    print("Average MSE:", total_mse / len(loader))
-    print("Average SNR:", total_snr / len(loader))
+    print("Average MSE:           ", total_mse / len(loader))
+    print("Average SNR (noisy):   ", total_snr_noisy / len(loader))
+    print("Average SNR (denoised):", total_snr / len(loader))
+    print("SNR improvement:       ", (total_snr - total_snr_noisy) / len(loader))
 
 
 if __name__ == "__main__":
