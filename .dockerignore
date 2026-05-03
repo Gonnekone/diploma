@@ -1,0 +1,29 @@
+# Датасет и результаты — основная причина раздутого контекста
+noisecanceletionmodel/data/
+noisecanceletionmodel/test_results/
+
+# Модель — только .onnx нужен, остальное исключаем
+noisecanceletionmodel/modeldata/*.pth
+noisecanceletionmodel/modeldata/*.png
+noisecanceletionmodel/modeldata/*.data
+
+# Python
+venv/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Git
+.git/
+.gitattributes
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Временные файлы
+*.tgz
+*.tmp
+*.log

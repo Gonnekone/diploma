@@ -1,32 +1,62 @@
-FROM --platform=$BUILDPLATFORM golang:1.16.7-alpine3.14 AS builder
+# Builder: Debian (glibc) — нужен для CGO, opus и onnxruntime
+FROM golang:1.25-bookworm AS builder
 WORKDIR /src
 
-ARG TARGETOS
 ARG TARGETARCH
 
-RUN apk add --no-cache git
+# Зависимости для сборки
+# libopusfile-dev нужен для github.com/hraban/opus
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopus-dev \
+    libopusfile-dev \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Скачиваем onnxruntime под нужную архитектуру
+RUN set -eux; \
+    if [ "$TARGETARCH" = "arm64" ]; then ARCH="aarch64"; else ARCH="x64"; fi; \
+    ORT_DIR="onnxruntime-linux-${ARCH}-1.19.2"; \
+    wget -q "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/${ORT_DIR}.tgz" -O ort.tgz; \
+    tar xzf ort.tgz; \
+    cp ${ORT_DIR}/lib/libonnxruntime.so* /usr/lib/; \
+    ldconfig; \
+    rm -rf ort.tgz ${ORT_DIR}
 
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    go mod download
+RUN go mod download
 
 COPY . .
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -ldflags="-s -w" -o /out/app ./cmd
 
-FROM --platform=$TARGETPLATFORM alpine:3.19 AS runtime
-RUN apk --no-cache add ca-certificates tzdata
+ARG VERSION=dev
+RUN CGO_ENABLED=1 go build \
+    -ldflags="-s -w -X main.Version=${VERSION}" \
+    -o /out/app ./cmd
 
-RUN addgroup -S app && adduser -S -G app app
+# Runtime: slim Debian
+FROM debian:bookworm-slim AS runtime
+
+# libopusfile0 — runtime-зависимость для opus
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    tzdata \
+    libopus0 \
+    libopusfile0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/lib/libonnxruntime.so* /usr/lib/
+RUN ldconfig
+
+RUN groupadd -r app && useradd -r -g app app
 
 WORKDIR /src
 
-COPY --from=builder /out/app /bin/app
-COPY --from=builder /src/views /src/views
+COPY --from=builder /out/app    /bin/app
+COPY --from=builder /src/views  /src/views
 COPY --from=builder /src/assets /src/assets
+
+RUN mkdir -p /src/noisecanceletionmodel/modeldata
+COPY noisecanceletionmodel/modeldata/noise_suppressor.onnx \
+     /src/noisecanceletionmodel/modeldata/noise_suppressor.onnx
 
 EXPOSE 8080
 USER app

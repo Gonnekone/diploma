@@ -21,7 +21,7 @@ var (
 	key  = flag.String("key", "", "")
 )
 
-func Run() error {
+func Run(version string) error {
 	flag.Parse()
 
 	if *addr == ":" {
@@ -32,6 +32,10 @@ func Run() error {
 	app := fiber.New(fiber.Config{Views: engine})
 	app.Use(logger.New())
 	app.Use(cors.New())
+	app.Use(func(c *fiber.Ctx) error {
+		c.Locals("Version", version)
+		return c.Next()
+	})
 
 	app.Get("/", handlers.Welcome)
 	app.Get("/room/create", handlers.RoomCreate)
@@ -49,6 +53,9 @@ func Run() error {
 	app.Get("/stream/:suuid/chat/websocket", websocket.New(handlers.StreamChatWebsocket))
 	app.Get("/stream/:suuid/viewer/websocket", websocket.New(handlers.StreamViewerWebsocket))
 	app.Static("/", "./assets")
+	app.Get("/version", func(c *fiber.Ctx) error {
+		return c.SendString(version)
+	})
 
 	w.Rooms = make(map[string]*w.Room)
 	w.Streams = make(map[string]*w.Room)

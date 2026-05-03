@@ -7,17 +7,20 @@ import (
 	"v/internal/server"
 )
 
+var Version = "dev" // перезаписывается при сборке через -ldflags
+
 func main() {
-	if err := server.Run(); err != nil {
+	if err := server.Run(Version); err != nil {
 		log.Fatalln(err.Error())
 	}
 }
 
 # noisecanceletionmodel/test_noise_suppressor.py
 import os
+
+import matplotlib.pyplot as plt
 import torch
 import torchaudio
-
 from torch.utils.data import Dataset, DataLoader
 from torchaudio.transforms import Resample
 
@@ -45,6 +48,7 @@ device = torch.device(
 print("Using device:", device)
 
 window = torch.hann_window(FRAME_LENGTH).to(device)
+
 
 class TestDataset(Dataset):
 
@@ -115,7 +119,6 @@ class NoiseSuppressor(torch.nn.Module):
         )
 
     def forward(self, x):
-
         x = self.encoder(x)
 
         B, C, F, T = x.shape
@@ -137,7 +140,6 @@ def compute_snr(clean, pred):
 
 
 def test():
-
     dataset = TestDataset()
     loader = DataLoader(dataset, batch_size=1, shuffle=False)
 
@@ -148,6 +150,7 @@ def test():
 
     total_mse = 0
     total_snr = 0
+    total_snr_noisy = 0
 
     print("\nTesting model...\n")
 
@@ -184,15 +187,15 @@ def test():
             hop_length=HOP_LENGTH,
             window=window,
             length=TARGET_LEN
-        )
-
-        audio = audio.unsqueeze(0)
+        ).unsqueeze(0)
 
         mse = torch.mean((audio - clean) ** 2).item()
         snr = compute_snr(clean, audio).item()
+        snr_noisy = compute_snr(clean, noisy).item()
 
         total_mse += mse
         total_snr += snr
+        total_snr_noisy += snr_noisy
 
         if i < 5:
             torchaudio.save(f"{OUTPUT_DIR}/sample_{i}_clean.wav", clean.squeeze(0).cpu(), SAMPLE_RATE)
@@ -201,12 +204,52 @@ def test():
 
             print(f"Saved sample {i}")
 
+            clean_mag = torch.abs(torch.stft(
+                clean.squeeze(1), n_fft=FRAME_LENGTH, hop_length=HOP_LENGTH,
+                window=window, return_complex=True
+            )).squeeze(0).cpu()
+
+            noisy_mag_plot = noisy_mag.squeeze(0).cpu()
+            pred_mag_plot = pred_mag.squeeze(0).cpu()
+
+            vmin = min(clean_mag.min(), noisy_mag_plot.min(), pred_mag_plot.min()).item()
+            vmax = max(clean_mag.max(), noisy_mag_plot.max(), pred_mag_plot.max()).item()
+
+            frames_per_sec = SAMPLE_RATE / HOP_LENGTH
+            duration = clean_mag.shape[1] / frames_per_sec
+
+            fig, axes = plt.subplots(3, 1, figsize=(12, 6))
+
+            for ax, data, title in zip(
+                    axes,
+                    [noisy_mag_plot, clean_mag, pred_mag_plot],
+                    ["Зашумлённый сигнал", "Чистый сигнал", "Восстановленный сигнал"]
+            ):
+                ax.imshow(
+                    data.numpy(), origin="lower", aspect="auto",
+                    vmin=vmin, vmax=vmax, cmap='terrain',
+                    extent=[0, duration, 0, SAMPLE_RATE // 2]
+                )
+                ax.set_title(title)
+                ax.set_xlabel("Время (сек)")
+                ax.set_ylabel("Частота (Гц)")
+                ax.set_ylim(0, 2000)
+
+            plt.suptitle(f"Sample {i}")
+            plt.tight_layout()
+            plt.savefig(f"{OUTPUT_DIR}/sample_{i}_spectrograms.png")
+            plt.close()
+
+            print(f"Saved spectrograms for sample {i}")
+
     print("\n====================")
     print("RESULTS")
     print("====================\n")
 
-    print("Average MSE:", total_mse / len(loader))
-    print("Average SNR:", total_snr / len(loader))
+    print("Average MSE:           ", total_mse / len(loader))
+    print("Average SNR (noisy):   ", total_snr_noisy / len(loader))
+    print("Average SNR (denoised):", total_snr / len(loader))
+    print("SNR improvement:       ", (total_snr - total_snr_noisy) / len(loader))
 
 
 if __name__ == "__main__":
@@ -243,23 +286,21 @@ import os
 import random
 import time
 
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchaudio
 import torchaudio.functional as F
-
 from torch.utils.data import Dataset, DataLoader
 from torchaudio.transforms import Spectrogram, Resample
-
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 SAMPLE_RATE = 48000
 FRAME_LENGTH = 512
 HOP_LENGTH = 128
 
-EPOCHS = 30
+EPOCHS = 40
 BATCH_SIZE = 8
 LR = 3e-4
 
@@ -281,6 +322,7 @@ device = torch.device(
 )
 
 print("Using device:", device)
+
 
 class AudioDataset(Dataset):
     def __init__(self, mode="train"):
@@ -383,7 +425,6 @@ class NoiseSuppressor(nn.Module):
 
 
 def loss_fn(noisy_log, clean_log, mask, noisy_wave, clean_wave, pred_wave):
-
     noisy_mag = torch.exp(noisy_log.squeeze(1))
     clean_mag = torch.exp(clean_log.squeeze(1))
 
@@ -396,6 +437,7 @@ def loss_fn(noisy_log, clean_log, mask, noisy_wave, clean_wave, pred_wave):
     snr_loss = -torch.mean(si_snr(clean_wave, pred_wave))
 
     return loss_mask + 0.3 * loss_spec + 0.5 * snr_loss
+
 
 def si_snr(clean, pred):
     clean = clean - clean.mean(dim=-1, keepdim=True)
@@ -412,8 +454,8 @@ def si_snr(clean, pred):
         (torch.sum(e_noise ** 2, dim=-1) + 1e-6)
     )
 
-def train():
 
+def train():
     ds = AudioDataset("train")
     dl = DataLoader(ds, batch_size=BATCH_SIZE, shuffle=True)
 
@@ -428,8 +470,11 @@ def train():
 
     losses = []
     epoch_losses = []
+    mask_losses = []
+    spec_losses = []
+    snr_losses = []
 
-    print("\n🚀 Training started\n")
+    print("\nTraining started\n")
 
     for epoch in range(EPOCHS):
 
@@ -485,22 +530,11 @@ def train():
 
             loss_spec = torch.mean((pred_mag - clean_mag) ** 2)
 
-            def si_snr(clean, pred):
-                clean = clean - clean.mean(dim=-1, keepdim=True)
-                pred = pred - pred.mean(dim=-1, keepdim=True)
-
-                s_target = (torch.sum(pred * clean, dim=-1, keepdim=True) * clean) / (
-                        torch.sum(clean ** 2, dim=-1, keepdim=True) + 1e-6
-                )
-
-                e_noise = pred - s_target
-
-                return 10 * torch.log10(
-                    torch.sum(s_target ** 2, dim=-1) /
-                    (torch.sum(e_noise ** 2, dim=-1) + 1e-6)
-                )
-
             loss_snr = -torch.mean(si_snr(clean_wave, pred_wave))
+
+            mask_losses.append(loss_mask.item())
+            spec_losses.append(loss_spec.item())
+            snr_losses.append(-loss_snr.item())
 
             loss = loss_mask + 0.3 * loss_spec + 0.5 * loss_snr
 
@@ -515,7 +549,7 @@ def train():
 
             total_loss += loss.item()
 
-            progress.set_description(f"Epoch {epoch+1}")
+            progress.set_description(f"Epoch {epoch + 1}")
             progress.set_postfix(loss=loss.item())
 
         avg = total_loss / len(dl)
@@ -525,10 +559,22 @@ def train():
 
         scheduler.step(avg)
 
-        print(f"Epoch {epoch+1} | loss {avg:.4f} | time {time.time()-start:.1f}s")
+        print(f"Epoch {epoch + 1} | loss {avg:.4f} | time {time.time() - start:.1f}s")
 
     torch.save(model.state_dict(), "modeldata/noise_suppressor.pth")
-    print("\n💾 Model saved")
+    print("\nModel saved")
+
+    plot_data = epoch_losses if PLOT_BY == "epoch" else losses
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(plot_data)
+    plt.title("Training Loss")
+    plt.xlabel("Epoch" if PLOT_BY == "epoch" else "Batch")
+    plt.ylabel("Loss")
+    plt.grid()
+    plt.savefig("modeldata/training_loss.png")
+
+    print("Loss graph saved")
 
     model.eval().cpu()
 
@@ -546,23 +592,119 @@ def train():
         opset_version=17
     )
 
-    print("✅ ONNX exported")
-
-    plot_data = epoch_losses if PLOT_BY == "epoch" else losses
-
-    plt.figure(figsize=(12, 6))
-    plt.plot(plot_data)
-    plt.title("Training Loss")
-    plt.xlabel("Epoch" if PLOT_BY == "epoch" else "Batch")
-    plt.ylabel("Loss")
-    plt.grid()
-    plt.savefig("modeldata/training_loss.png")
-
-    print("📊 Loss graph saved")
+    print("ONNX exported")
 
 
 if __name__ == "__main__":
     train()
+
+# go.mod
+module v
+
+go 1.25.5
+
+require (
+	github.com/fasthttp/websocket v1.4.2
+	github.com/gofiber/fiber/v2 v2.9.0
+	github.com/gofiber/template v1.6.9
+	github.com/gofiber/websocket/v2 v2.0.3
+	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
+	github.com/livekit/protocol v1.43.2
+	github.com/livekit/server-sdk-go/v2 v2.13.0
+	github.com/pion/rtcp v1.2.16
+	github.com/pion/turn/v2 v2.1.6
+	github.com/pion/webrtc/v3 v3.3.6
+)
+
+require (
+	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.10-20250912141014-52f32327d4b0.1 // indirect
+	buf.build/go/protovalidate v1.0.1 // indirect
+	buf.build/go/protoyaml v0.6.0 // indirect
+	cel.dev/expr v0.25.1 // indirect
+	github.com/andybalholm/brotli v1.0.5 // indirect
+	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
+	github.com/benbjohnson/clock v1.3.5 // indirect
+	github.com/bep/debounce v1.2.1 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/dennwc/iters v1.2.2 // indirect
+	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
+	github.com/frostbyte73/core v0.1.1 // indirect
+	github.com/fsnotify/fsnotify v1.9.0 // indirect
+	github.com/gammazero/deque v1.2.0 // indirect
+	github.com/go-jose/go-jose/v3 v3.0.4 // indirect
+	github.com/go-logr/logr v1.4.3 // indirect
+	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/google/cel-go v0.26.1 // indirect
+	github.com/hraban/opus v0.0.0-20251117090126-c76ea7e21bf3 // indirect
+	github.com/jxskiss/base62 v1.1.0 // indirect
+	github.com/klauspost/compress v1.18.2 // indirect
+	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	github.com/kr/pretty v0.3.1 // indirect
+	github.com/lithammer/shortuuid/v4 v4.2.0 // indirect
+	github.com/livekit/mageutil v0.0.0-20250511045019-0f1ff63f7731 // indirect
+	github.com/livekit/mediatransportutil v0.0.0-20251128105421-19c7a7b81c22 // indirect
+	github.com/livekit/psrpc v0.7.1 // indirect
+	github.com/madelynnblue/go-dsp v1.0.0 // indirect
+	github.com/magefile/mage v1.15.0 // indirect
+	github.com/moby/sys/user v0.3.0 // indirect
+	github.com/nats-io/nats.go v1.47.0 // indirect
+	github.com/nats-io/nkeys v0.4.12 // indirect
+	github.com/nats-io/nuid v1.0.1 // indirect
+	github.com/pion/datachannel v1.5.10 // indirect
+	github.com/pion/dtls/v2 v2.2.12 // indirect
+	github.com/pion/dtls/v3 v3.0.7 // indirect
+	github.com/pion/ice/v2 v2.3.38 // indirect
+	github.com/pion/ice/v4 v4.0.12 // indirect
+	github.com/pion/interceptor v0.1.42 // indirect
+	github.com/pion/logging v0.2.4 // indirect
+	github.com/pion/mdns v0.0.12 // indirect
+	github.com/pion/mdns/v2 v2.1.0 // indirect
+	github.com/pion/randutil v0.1.0 // indirect
+	github.com/pion/rtp v1.8.25 // indirect
+	github.com/pion/sctp v1.8.41 // indirect
+	github.com/pion/sdp/v3 v3.0.16 // indirect
+	github.com/pion/srtp/v2 v2.0.20 // indirect
+	github.com/pion/srtp/v3 v3.0.9 // indirect
+	github.com/pion/stun v0.6.1 // indirect
+	github.com/pion/stun/v3 v3.0.1 // indirect
+	github.com/pion/transport/v2 v2.2.10 // indirect
+	github.com/pion/transport/v3 v3.1.1 // indirect
+	github.com/pion/turn/v4 v4.1.3 // indirect
+	github.com/pion/webrtc/v4 v4.1.6 // indirect
+	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+	github.com/puzpuzpuz/xsync/v3 v3.5.1 // indirect
+	github.com/redis/go-redis/v9 v9.17.2 // indirect
+	github.com/rogpeppe/go-internal v1.14.1 // indirect
+	github.com/savsgio/gotils v0.0.0-20200117113501-90175b0fbe3f // indirect
+	github.com/stoewer/go-strcase v1.3.1 // indirect
+	github.com/stretchr/testify v1.11.1 // indirect
+	github.com/twitchtv/twirp v8.1.3+incompatible // indirect
+	github.com/valyala/bytebufferpool v1.0.0 // indirect
+	github.com/valyala/fasthttp v1.23.0 // indirect
+	github.com/valyala/tcplisten v0.0.0-20161114210144-ceec8f93295a // indirect
+	github.com/wlynxg/anet v0.0.5 // indirect
+	github.com/yalue/onnxruntime_go v1.28.0 // indirect
+	github.com/zeebo/xxh3 v1.0.2 // indirect
+	go.uber.org/atomic v1.11.0 // indirect
+	go.uber.org/multierr v1.11.0 // indirect
+	go.uber.org/zap v1.27.1 // indirect
+	go.uber.org/zap/exp v0.3.0 // indirect
+	golang.org/x/crypto v0.45.0 // indirect
+	golang.org/x/exp v0.0.0-20251125195548-87e1e737ad39 // indirect
+	golang.org/x/mod v0.30.0 // indirect
+	golang.org/x/net v0.47.0 // indirect
+	golang.org/x/sync v0.18.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
+	golang.org/x/text v0.31.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20251124214823-79d6a2a48846 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20251124214823-79d6a2a48846 // indirect
+	google.golang.org/grpc v1.77.0 // indirect
+	google.golang.org/protobuf v1.36.10 // indirect
+	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
+)
 
 # tools/turn/turn.go
 package main
@@ -649,35 +791,81 @@ func main() {
 # Makefile
 PLATFORMS ?= linux/amd64,linux/arm64
 
+VERSION := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
+
 UNAME_M := $(shell uname -m)
 LOCAL_PLATFORM := $(if $(filter $(UNAME_M),x86_64),linux/amd64,$(if $(filter $(UNAME_M),aarch64 arm64),linux/arm64,linux/amd64))
 
 DF_VIDEO := containers/images/Dockerfile
 DF_TURN  := containers/images/Dockerfile.turn
 
-.PHONY: buildx-init build-dev push-dev push-turn clean-dev run-dev down-dev logs-dev stop-prod clean-prod run-prod logs-prod
+IMAGE_VIDEO := gonnekone/videoapp
+IMAGE_TURN  := gonnekone/turn
 
-# Инициализация buildx и binfmt (выполнить один раз на машине)
+.PHONY: buildx-init build-dev push push-turn deploy \
+        clean-dev run-dev down-dev logs-dev \
+        stop-prod clean-prod run-prod logs-prod version
+
+version:
+	@echo "Current version: $(VERSION)"
+
 buildx-init:
 	@docker buildx create --name mb --use 2>/dev/null || docker buildx use mb
 	@docker run --privileged --rm tonistiigi/binfmt --install all >/dev/null
 	@docker buildx inspect --bootstrap >/dev/null
 	@echo "buildx готов (builder=mb), binfmt установлен"
 
-# DEV
-
 build-dev: buildx-init
-	docker buildx build --load --platform $(LOCAL_PLATFORM) -t videoapp -f $(DF_VIDEO) .
-	docker buildx build --load --platform $(LOCAL_PLATFORM) -t turn     -f $(DF_TURN)  .
+	docker buildx build --load --platform $(LOCAL_PLATFORM) \
+		-t $(IMAGE_VIDEO):dev -f $(DF_VIDEO) .
+	docker buildx build --load --platform $(LOCAL_PLATFORM) \
+		-t $(IMAGE_TURN):dev  -f $(DF_TURN)  .
 
-push-dev: buildx-init
-	docker buildx build --platform $(PLATFORMS) -t gonnekone/videoapp:latest -f $(DF_VIDEO) --push .
+push: buildx-init
+	@echo ">>> Pushing $(IMAGE_VIDEO):$(VERSION)"
+	@git lfs pull 2>/dev/null || true
+	docker buildx build --no-cache --platform $(PLATFORMS) \
+		--build-arg VERSION=$(VERSION) \
+		-t $(IMAGE_VIDEO):$(VERSION) \
+		-t $(IMAGE_VIDEO):latest \
+		-f $(DF_VIDEO) --push .
+	@echo "<<< Done: $(IMAGE_VIDEO):$(VERSION)"
 
 push-turn: buildx-init
-	docker buildx build --platform $(PLATFORMS) -t gonnekone/turn:latest -f $(DF_TURN) --push .
+	@echo ">>> Pushing $(IMAGE_TURN):$(VERSION)"
+	docker buildx build --no-cache --platform $(PLATFORMS) \
+		-t $(IMAGE_TURN):$(VERSION) \
+		-t $(IMAGE_TURN):latest \
+		-f $(DF_TURN) --push .
+	@echo "<<< Done: $(IMAGE_TURN):$(VERSION)"
 
-clean-dev:
-	docker compose -f containers/composes/dc.dev.yml down
+# для деплоя на сервере:
+# 1 — сохраняем текущие образы как backup
+# sudo docker tag gonnekone/videoapp:latest gonnekone/videoapp:backup
+# sudo docker tag gonnekone/turn:latest gonnekone/turn:backup
+
+# 2 — подтягиваем новые образы
+# sudo docker pull gonnekone/videoapp:latest && sudo docker pull gonnekone/turn:latest
+
+# 3 — перезапускаем только app и turn, caddy не трогаем
+# sudo docker compose up -d --no-deps app turn
+
+# посмотреть бекапы
+# sudo docker images | grep gonnekone
+deploy: push push-turn
+	@echo ""
+	@echo "==============================="
+	@echo " Deployed version: $(VERSION)"
+	@echo "==============================="
+	@echo " $(IMAGE_VIDEO):$(VERSION)"
+	@echo " $(IMAGE_TURN):$(VERSION)"
+	@echo ""
+	@echo " Чтобы запустить эту версию на сервере:"
+	@echo " Обновите dc.prod.yml:"
+	@echo "   image: $(IMAGE_VIDEO):$(VERSION)"
+	@echo "   image: $(IMAGE_TURN):$(VERSION)"
+	@echo ""
+	@echo " Затем: make run-prod"
 
 run-dev:
 	docker compose -f containers/composes/dc.dev.yml up
@@ -685,10 +873,11 @@ run-dev:
 down-dev:
 	docker compose -f containers/composes/dc.dev.yml down
 
+clean-dev:
+	docker compose -f containers/composes/dc.dev.yml down --volumes
+
 logs-dev:
 	docker compose -f containers/composes/dc.dev.yml logs -f --tail 100
-
-# PROD
 
 stop-prod:
 	docker compose -f containers/composes/dc.prod.yml stop --timeout 120
@@ -729,7 +918,7 @@ var (
 	key  = flag.String("key", "", "")
 )
 
-func Run() error {
+func Run(version string) error {
 	flag.Parse()
 
 	if *addr == ":" {
@@ -740,6 +929,10 @@ func Run() error {
 	app := fiber.New(fiber.Config{Views: engine})
 	app.Use(logger.New())
 	app.Use(cors.New())
+	app.Use(func(c *fiber.Ctx) error {
+		c.Locals("Version", version)
+		return c.Next()
+	})
 
 	app.Get("/", handlers.Welcome)
 	app.Get("/room/create", handlers.RoomCreate)
@@ -757,6 +950,9 @@ func Run() error {
 	app.Get("/stream/:suuid/chat/websocket", websocket.New(handlers.StreamChatWebsocket))
 	app.Get("/stream/:suuid/viewer/websocket", websocket.New(handlers.StreamViewerWebsocket))
 	app.Static("/", "./assets")
+	app.Get("/version", func(c *fiber.Ctx) error {
+		return c.SendString(version)
+	})
 
 	w.Rooms = make(map[string]*w.Room)
 	w.Streams = make(map[string]*w.Room)
@@ -773,6 +969,191 @@ func dispatchKeyFrames() {
 			room.Peers.DispatchKeyFrame()
 		}
 	}
+}
+
+# internal/model/stft.go
+package model
+
+import (
+	"math"
+	"math/cmplx"
+
+	"github.com/madelynnblue/go-dsp/fft"
+)
+
+const (
+	SampleRate  = 48000
+	FrameLength = 512
+	HopLength   = 128
+	FreqBins    = FrameLength/2 + 1 // 257
+)
+
+// hannWindow возвращает окно Хэнна длиной n
+func hannWindow(n int) []float64 {
+	w := make([]float64, n)
+	for i := range w {
+		w[i] = 0.5 * (1 - math.Cos(2*math.Pi*float64(i)/float64(n-1)))
+	}
+	return w
+}
+
+// STFT — кратковременное преобразование Фурье
+// Принимает PCM float32, возвращает [T][FreqBins]complex128
+func STFT(samples []float32) [][]complex128 {
+	window := hannWindow(FrameLength)
+	numFrames := (len(samples)-FrameLength)/HopLength + 1
+	if numFrames <= 0 {
+		return nil
+	}
+
+	frames := make([][]complex128, numFrames)
+	for t := 0; t < numFrames; t++ {
+		start := t * HopLength
+		frame := make([]complex128, FrameLength)
+		for i := 0; i < FrameLength; i++ {
+			if start+i < len(samples) {
+				frame[i] = complex(float64(samples[start+i])*window[i], 0)
+			}
+		}
+		spectrum := fft.FFT(frame)
+		// берём только первую половину (FreqBins = N/2 + 1)
+		frames[t] = make([]complex128, FreqBins)
+		copy(frames[t], spectrum[:FreqBins])
+	}
+	return frames
+}
+
+// ISTFT — обратное STFT с overlap-add восстановлением
+// Принимает [T][FreqBins]complex128, возвращает PCM float32
+func ISTFT(frames [][]complex128, length int) []float32 {
+	window := hannWindow(FrameLength)
+	output := make([]float64, length)
+	windowSum := make([]float64, length)
+
+	for t, frame := range frames {
+		// восстанавливаем полный симметричный спектр для вещественного IFFT
+		full := make([]complex128, FrameLength)
+		copy(full, frame)
+		for i := 1; i < FrameLength/2; i++ {
+			full[FrameLength-i] = cmplx.Conj(frame[i])
+		}
+
+		timeFrame := fft.IFFT(full)
+
+		start := t * HopLength
+		for i := 0; i < FrameLength && start+i < length; i++ {
+			output[start+i] += real(timeFrame[i]) * window[i]
+			windowSum[start+i] += window[i] * window[i]
+		}
+	}
+
+	// нормализация через сумму окон (overlap-add)
+	result := make([]float32, length)
+	for i := range result {
+		if windowSum[i] > 1e-8 {
+			result[i] = float32(output[i] / windowSum[i])
+		}
+	}
+	return result
+}
+
+# internal/model/suppressor.go
+package model
+
+import (
+	"fmt"
+	"math"
+	"math/cmplx"
+
+	ort "github.com/yalue/onnxruntime_go"
+)
+
+// Suppressor — обёртка над ONNX-моделью шумоподавления
+type Suppressor struct {
+	session *ort.DynamicAdvancedSession
+}
+
+// NewSuppressor загружает ONNX-модель по указанному пути
+func NewSuppressor(modelPath string) (*Suppressor, error) {
+	if err := ort.InitializeEnvironment(); err != nil {
+		return nil, fmt.Errorf("onnxruntime init: %w", err)
+	}
+
+	session, err := ort.NewDynamicAdvancedSession(
+		modelPath,
+		[]string{"input"},  // имя входного узла из экспорта
+		[]string{"output"}, // имя выходного узла из экспорта
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create onnx session: %w", err)
+	}
+
+	return &Suppressor{session: session}, nil
+}
+
+// Denoise принимает PCM float32 и возвращает очищенный от шума PCM float32
+func (s *Suppressor) Denoise(samples []float32) ([]float32, error) {
+	frames := STFT(samples)
+	if len(frames) == 0 {
+		return samples, nil
+	}
+	T := len(frames)
+
+	// строим лог-амплитудную спектрограмму [1, 1, FreqBins, T]
+	inputData := make([]float32, FreqBins*T)
+	for f := 0; f < FreqBins; f++ {
+		for t := 0; t < T; t++ {
+			m := float32(cmplx.Abs(frames[t][f]))
+			inputData[f*T+t] = float32(math.Log(float64(m) + 1e-6))
+		}
+	}
+
+	inputShape := ort.NewShape(1, 1, int64(FreqBins), int64(T))
+	inputTensor, err := ort.NewTensor(inputShape, inputData)
+	if err != nil {
+		return nil, fmt.Errorf("create input tensor: %w", err)
+	}
+	defer inputTensor.Destroy()
+
+	// выходной тензор: маска [1, FreqBins, T]
+	outputShape := ort.NewShape(1, int64(FreqBins), int64(T))
+	outputData := make([]float32, FreqBins*T)
+	outputTensor, err := ort.NewTensor(outputShape, outputData)
+	if err != nil {
+		return nil, fmt.Errorf("create output tensor: %w", err)
+	}
+	defer outputTensor.Destroy()
+
+	// инференс модели
+	if err = s.session.Run(
+		[]ort.ArbitraryTensor{inputTensor},
+		[]ort.ArbitraryTensor{outputTensor},
+	); err != nil {
+		return nil, fmt.Errorf("model run: %w", err)
+	}
+
+	mask := outputTensor.GetData()
+
+	// применяем маску: предсказанная амплитуда × исходная фаза
+	predFrames := make([][]complex128, T)
+	for t := 0; t < T; t++ {
+		predFrames[t] = make([]complex128, FreqBins)
+		for f := 0; f < FreqBins; f++ {
+			m := float64(mask[f*T+t])
+			mag := cmplx.Abs(frames[t][f])
+			phase := cmplx.Phase(frames[t][f])
+			predFrames[t][f] = cmplx.Rect(mag*m, phase)
+		}
+	}
+
+	return ISTFT(predFrames, len(samples)), nil
+}
+
+// Close освобождает ресурсы ONNX Runtime
+func (s *Suppressor) Close() {
+	s.session.Destroy()
+	ort.DestroyEnvironment()
 }
 
 # internal/handlers/stream.go
@@ -1061,54 +1442,86 @@ noisecanceletionmodel/modeldata/** filter=lfs diff=lfs merge=lfs -text
 
 
 # containers/images/Dockerfile
-FROM --platform=$BUILDPLATFORM golang:1.16.7-alpine3.14 AS builder
+# Builder: Debian (glibc) — нужен для CGO, opus и onnxruntime
+FROM golang:1.25-bookworm AS builder
 WORKDIR /src
 
-ARG TARGETOS
 ARG TARGETARCH
 
-RUN apk add --no-cache git
+# Зависимости для сборки
+# libopusfile-dev нужен для github.com/hraban/opus
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopus-dev \
+    libopusfile-dev \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Скачиваем onnxruntime под нужную архитектуру
+RUN set -eux; \
+    if [ "$TARGETARCH" = "arm64" ]; then ARCH="aarch64"; else ARCH="x64"; fi; \
+    ORT_DIR="onnxruntime-linux-${ARCH}-1.19.2"; \
+    wget -q "https://github.com/microsoft/onnxruntime/releases/download/v1.19.2/${ORT_DIR}.tgz" -O ort.tgz; \
+    tar xzf ort.tgz; \
+    cp ${ORT_DIR}/lib/libonnxruntime.so* /usr/lib/; \
+    ldconfig; \
+    rm -rf ort.tgz ${ORT_DIR}
 
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    go mod download
+RUN go mod download
 
 COPY . .
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -ldflags="-s -w" -o /out/app ./cmd
 
-FROM --platform=$TARGETPLATFORM alpine:3.19 AS runtime
-RUN apk --no-cache add ca-certificates tzdata
+ARG VERSION=dev
+RUN CGO_ENABLED=1 go build \
+    -ldflags="-s -w -X main.Version=${VERSION}" \
+    -o /out/app ./cmd
 
-RUN addgroup -S app && adduser -S -G app app
+# Runtime: slim Debian
+FROM debian:bookworm-slim AS runtime
+
+# libopusfile0 — runtime-зависимость для opus
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    tzdata \
+    libopus0 \
+    libopusfile0 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/lib/libonnxruntime.so* /usr/lib/
+RUN ldconfig
+
+RUN groupadd -r app && useradd -r -g app app
 
 WORKDIR /src
 
-COPY --from=builder /out/app /bin/app
-COPY --from=builder /src/views /src/views
+COPY --from=builder /out/app    /bin/app
+COPY --from=builder /src/views  /src/views
 COPY --from=builder /src/assets /src/assets
+
+RUN mkdir -p /src/noisecanceletionmodel/modeldata
+COPY noisecanceletionmodel/modeldata/noise_suppressor.onnx \
+     /src/noisecanceletionmodel/modeldata/noise_suppressor.onnx
 
 EXPOSE 8080
 USER app
 ENTRYPOINT ["/bin/app"]
 
 # containers/images/Dockerfile.turn
-FROM golang:1.16.7-alpine3.14
+FROM golang:1.25-alpine AS builder
 WORKDIR /src
 
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 
-RUN CGO_ENABLED=0 go build -o /bin/app ./tools/turn
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /bin/app ./tools/turn
 
-FROM alpine
+FROM alpine:3.19
 WORKDIR /src
 
-COPY --from=0 /bin/app /bin/app
+RUN apk --no-cache add ca-certificates
+
+COPY --from=builder /bin/app /bin/app
 
 ENTRYPOINT ["/bin/app"]
 
@@ -1157,924 +1570,1088 @@ vc.158.160.8.131.sslip.io {
     encode zstd gzip
 }
 
-# main/.git/config
-[core]
-	repositoryformatversion = 0
-	filemode = true
-	bare = false
-	logallrefupdates = true
-	ignorecase = true
-	precomposeunicode = true
+# views/.DS_Store
 
-# main/.git/HEAD
-ref: refs/heads/master
 
-# main/.git/info/exclude
-# git ls-files --others --exclude-from=.git/info/exclude
-# Lines that start with '#' are comments.
-# For a project mostly in C, the following would be a good set of
-# exclude patterns (uncomment them if you want to use them):
-# *.[oa]
-# *~
+# views/stream.html
+{{ if .NoStream }}
 
-# main/.git/description
-Unnamed repository; edit this file 'description' to name the repository.
+<div id="nostream" class="columns">
+	<div class="column notif">
+		<article class="notification is-danger is-link">
+			There is no stream for the given Stream Link. <br>
+			Please join another stream room.
+		</article>
+	</div>
+</div>
+{{ else }}
 
-# main/.git/hooks/commit-msg.sample
-#!/bin/sh
-#
-# An example hook script to check the commit log message.
-# Called by "git commit" with one argument, the name of the file
-# that has the commit message.  The hook should exit with non-zero
-# status after issuing an appropriate message if it wants to stop the
-# commit.  The hook is allowed to edit the commit message file.
-#
-# To enable this hook, rename this file to "commit-msg".
+{{ template "partials/chat" . }}
 
-# Uncomment the below to add a Signed-off-by line to the message.
-# Doing this in a hook is a bad idea in general, but the prepare-commit-msg
-# hook is more suited to it.
-#
-# SOB=$(git var GIT_AUTHOR_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
-# grep -qs "^$SOB" "$1" || echo "$SOB" >> "$1"
+<div class="viewer">
+	<p class="icon-users" id="viewer-count"></p>
+</div>
 
-# This example catches duplicate Signed-off-by lines.
+<div id="peers">
+	<div class="columns is-multiline" id="videos">
+		<div id="noonestream" class="column notif">
+			<article class="notification is-primary is-light">
+				Hey! <br>
+				No streamer in the room. <br>
+				Please wait for the streamer.
+			</article>
+		</div>
+		<div id="nocon" class="column notif">
+			<article class="notification is-danger">
+				Connection is closed! <br>
+				Please refresh the page.
+			</article>
+		</div>
+	</div>
+</div>
 
-test "" = "$(grep '^Signed-off-by: ' "$1" |
-	 sort | uniq -c | sed -e '/^[ 	]*1[ 	]/d')" || {
-	echo >&2 Duplicate Signed-off-by lines.
-	exit 1
+<script>
+	let StreamWebsocketAddr = "{{.StreamWebsocketAddr}}"
+	let ChatWebsocketAddr = "{{.ChatWebsocketAddr}}"
+	let ViewerWebsocketAddr = "{{.ViewerWebsocketAddr}}"
+</script>
+<script src="/javascript/stream.js"></script>
+<script src="/javascript/chat.js"></script>
+<script src="/javascript/viewer.js"></script>
+{{ end }}
+
+# views/layouts/main.html
+{{ template "partials/head" . }}
+{{ template "partials/header" . }}
+
+{{ embed }}
+
+{{ template "partials/footer" . }}
+
+# views/peer.html
+{{/* views/peer.html */}}
+
+<div id="noperm" class="columns">
+    <div class="column notif">
+        <article class="notification is-link">
+            Camera and microphone permissions are needed to join the room. <br>
+            Otherwise, you can join the <a href="{{ .StreamLink }}"><strong>stream</strong></a> as viewer.
+        </article>
+    </div>
+</div>
+
+<div id="peers">
+    <!-- Весь ряд видео+чат. Счётчик кладём поверх этого ряда (overlay). -->
+    <div class="video-chat-row">
+        <div class="columns is-multiline" id="videos">
+            <!-- self-view слева -->
+            <div class="column is-6 peer">
+                <video id="localVideo" class="video-area mirror" autoplay muted></video>
+                <div class="video-options">
+                    <div class="viewer viewer-overlay">
+                        <p class="icon-users" id="viewer-count"></p>
+                    </div>
+                    <div id="chat">
+                        <h3 class="chat-title">Chat</h3>
+                        <article class="message chat">
+                            <div id="chat-content">
+                                <div class="body">
+                                    <div id="log"></div>
+                                </div>
+                                <form id="form" class="chat-form" autocomplete="off">
+                                    <input class="input chat-input" id="msg" type="text" placeholder="type message..."/>
+                                </form>
+                            </div>
+                        </article>
+<!--                        &lt;!&ndash; кнопка под чатом &ndash;&gt;-->
+<!--                        <button id="noiseBtn" onclick="toggleNoise()"-->
+<!--                                style="margin-top:8px; padding:8px 16px; cursor:pointer; background:#2ecc71; border:none; border-radius:4px; color:white; font-size:14px; width:100%;">-->
+<!--                            Шумоподавление: ВКЛ-->
+<!--                        </button>-->
+                    </div>
+                </div>
+            </div>
+
+
+            <!-- чат справа на том же уровне -->
+            <div class="column is-6">
+                {{ template "partials/chat" . }}
+            </div>
+
+            <!-- уведомления ниже, как и раньше -->
+            <div id="noone" class="column is-6 notif">
+                <article id="noonein" class="notification is-primary is-light">
+                    <button class="delete"></button>
+                    No other streamer is in the room. <br>
+                    Share your room link to invite your friends.
+                </article>
+                <article class="notification is-primary is-light">
+                    <button class="delete"></button>
+                    Share your stream link with your viewers.
+                </article>
+            </div>
+            <div id="nocon" class="column is-6 notif">
+                <article class="notification is-danger">
+                    Connection is closed!<br>
+                    Please refresh the page.
+                </article>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let RoomWebsocketAddr = "{{.RoomWebsocketAddr}}"
+    let ChatWebsocketAddr = "{{.ChatWebsocketAddr}}"
+    let ViewerWebsocketAddr = "{{.ViewerWebsocketAddr}}"
+    let noiseEnabled = false;
+
+    function toggleNoise() {
+        const btn = document.getElementById('noiseBtn');
+        btn.style.background = noiseEnabled ? '#2ecc71' : '#e74c3c';
+        btn.textContent = noiseEnabled ? 'Шумоподавление: ВКЛ' : 'Шумоподавление: ВЫКЛ';
+
+        if (ws && ws.readyState === WebSocket.OPEN) {  // ← было conn, стало ws + проверка
+            ws.send(JSON.stringify({
+                event: 'noise_toggle',
+                data: noiseEnabled ? 'true' : 'false'
+            }));
+        }
+    }
+</script>
+<script src="/javascript/peer.js"></script>
+<script src="/javascript/chat.js"></script>
+<script src="/javascript/viewer.js"></script>
+<script src="//cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+# views/welcome.html
+<section class="hero is-medium is-link">
+	<div class="hero-body">
+		<h1 class="title">
+			That is simple.
+		</h1>
+		<p class="subtitle">
+			To talk with your friends, just click "Create Room".
+		</p>
+
+		<div class="buttons">
+			<a href="/room/create" class="button is-light">
+				<strong>Create Room</strong>
+			</a>
+		</div>
+	</div>
+</section>
+
+# views/partials/head.html
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#001E6C">
+    <link rel="icon" href="/favicon.ico">
+    <link rel="apple-touch-icon" href="/icon.png">
+    <link rel="stylesheet" href="/stylesheets/main.css">
+    <link rel="manifest" href="/manifest.json">
+    <title>Chat Room.</title>
+</head>
+
+# views/partials/footer.html
+<hr>
+<footer class="footer">
+    <div class="content">
+        <p style="font-size: small; color: #888; text-align: right;">
+            build: <span id="build-version">...</span>
+        </p>
+    </div>
+    <script src="/javascript/register.js"></script>
+    <script>
+        fetch('/version').then(r => r.text()).then(v => {
+            document.getElementById('build-version').textContent = v;
+        });
+    </script>
+</footer>
+
+# views/partials/header.html
+<body>
+<section class="section">
+    <div class="container">
+        <header>
+            <nav class="navbar" role="navigation" aria-label="main navigation">
+                <div class="navbar-brand">
+                    <a class="navbar-item title" href="/">Chat Room</a>
+                </div>
+                <div class="navbar-item">
+                    <p class="subtitle">
+
+                    </p>
+                </div>
+                {{ if .Type }}
+                <div class="navbar-end">
+                    {{ if eq .Type "room" }}
+                    <div class="navbar-item has-dropdown is-hoverable">
+                        <div class="navbar-link">
+                            Share
+                            </a>
+                            <div class="navbar-dropdown">
+                                <div class="navbar-item">
+                                    <button class="button is-light is-fullwidth"
+                                            onclick="copyToClipboard('{{ .RoomLink }}')">Room Link
+                                    </button>
+                                </div>
+                                <div class="navbar-item">
+                                    <button class="button is-light is-fullwidth"
+                                            onclick="copyToClipboard('{{ .StreamLink }}')">Stream Link
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="navbar-item">
+                        <a href="/" class="button is-danger">Leave Room</a>
+                    </div>
+                    {{ end }}
+                    {{ if eq .Type "stream" }}
+                    <div class="navbar-item">
+                        <a href="/" class="button is-danger">Leave Stream</a>
+                    </div>
+                    {{ end }}
+                </div>
+                {{ end }}
+            </nav>
+        </header>
+        <hr>
+
+# views/partials/chat.html
+<!--<div id="chat">-->
+<!--    <h3 class="chat-title">Chat</h3>-->
+
+<!--    <article class="message chat">-->
+<!--        <div id="chat-content">-->
+<!--            <div class="body">-->
+<!--                <div id="log"></div>-->
+<!--            </div>-->
+
+<!--            <form id="form" class="chat-form" autocomplete="off">-->
+<!--                <input class="input chat-input" id="msg" type="text" placeholder="type message..." />-->
+<!--            </form>-->
+<!--        </div>-->
+<!--    </article>-->
+<!--</div>-->
+
+# assets/.DS_Store
+
+
+
+
+
+
+# assets/manifest.json
+{
+    "theme_color": "#e5e9f0",
+    "description": "Talk, easily.",
+    "display": "standalone",
+    "icons": [{
+        "src": "icon.png",
+        "sizes": "256x256",
+        "type": "image/png"
+    }],
+    "name": "Golang Videochat App",
+    "short_name": "Videochat App",
+    "start_url": "/"
 }
 
-# main/.git/hooks/pre-rebase.sample
-#!/bin/sh
-#
-# Copyright (c) 2006, 2008 Junio C Hamano
-#
-# The "pre-rebase" hook is run just before "git rebase" starts doing
-# its job, and can prevent the command from running by exiting with
-# non-zero status.
-#
-# The hook is called with the following parameters:
-#
-# $1 -- the upstream the series was forked from.
-# $2 -- the branch being rebased (or empty when rebasing the current branch).
-#
-# This sample shows how to prevent topic branches that are already
-# merged to 'next' branch from getting rebased, because allowing it
-# would result in rebasing already published history.
+# assets/javascript/stream.js
+function connectStream() {
+	document.getElementById('peers').style.display = 'block'
+	const turnHost = "turn." + window.location.hostname;
 
-publish=next
-basebranch="$1"
-if test "$#" = 2
-then
-	topic="refs/heads/$2"
-else
-	topic=`git symbolic-ref HEAD` ||
-	exit 0 ;# we do not interrupt rebasing detached HEAD
-fi
+	let pc = new RTCPeerConnection({
+		iceServers: [
+			{ urls: "stun:stun.l.google.com:19302" },
+			{ urls: "turn:" + turnHost + ":3478", username: "gonnekone", credential: "gonnekone" }
+		]
+	})
 
-case "$topic" in
-refs/heads/??/*)
-	;;
-*)
-	exit 0 ;# we do not interrupt others.
-	;;
-esac
+	pc.ontrack = function (event) {
+		if (event.track.kind === 'audio') {
+			return
+		}
 
-# Now we are dealing with a topic branch being rebased
-# on top of master.  Is it OK to rebase it?
+		col = document.createElement("div")
+		col.className = "column is-6 peer"
+		let el = document.createElement(event.track.kind)
+		el.srcObject = event.streams[0]
+		el.setAttribute("controls", "true")
+		el.setAttribute("autoplay", "true")
+		el.setAttribute("playsinline", "true")
+		let playAttempt = setInterval(() => {
+			el.play()
+				.then(() => {
+					clearInterval(playAttempt);
+				})
+				.catch(error => {
+					console.log('unable to play the video, user has not interacted yet');
+				});
+		}, 3000);
 
-# Does the topic really exist?
-git show-ref -q "$topic" || {
-	echo >&2 "No such branch $topic"
-	exit 1
-}
+		col.appendChild(el)
+		document.getElementById('noonestream').style.display = 'none'
+		document.getElementById('nocon').style.display = 'none'
+		document.getElementById('videos').appendChild(col)
 
-# Is topic fully merged to master?
-not_in_master=`git rev-list --pretty=oneline ^master "$topic"`
-if test -z "$not_in_master"
-then
-	echo >&2 "$topic is fully merged to master; better remove it."
-	exit 1 ;# we could allow it, but there is no point.
-fi
+		event.track.onmute = function (event) {
+			el.play()
+		}
 
-# Is topic ever merged to next?  If so you should not be rebasing it.
-only_next_1=`git rev-list ^master "^$topic" ${publish} | sort`
-only_next_2=`git rev-list ^master           ${publish} | sort`
-if test "$only_next_1" = "$only_next_2"
-then
-	not_in_topic=`git rev-list "^$topic" master`
-	if test -z "$not_in_topic"
-	then
-		echo >&2 "$topic is already up to date with master"
-		exit 1 ;# we could allow it, but there is no point.
-	else
-		exit 0
-	fi
-else
-	not_in_next=`git rev-list --pretty=oneline ^${publish} "$topic"`
-	/usr/bin/perl -e '
-		my $topic = $ARGV[0];
-		my $msg = "* $topic has commits already merged to public branch:\n";
-		my (%not_in_next) = map {
-			/^([0-9a-f]+) /;
-			($1 => 1);
-		} split(/\n/, $ARGV[1]);
-		for my $elem (map {
-				/^([0-9a-f]+) (.*)$/;
-				[$1 => $2];
-			} split(/\n/, $ARGV[2])) {
-			if (!exists $not_in_next{$elem->[0]}) {
-				if ($msg) {
-					print STDERR $msg;
-					undef $msg;
-				}
-				print STDERR " $elem->[1]\n";
+		event.streams[0].onremovetrack = ({
+			track
+		}) => {
+			if (el.parentNode) {
+				el.parentNode.remove()
+			}
+			if (document.getElementById('videos').childElementCount <= 2) {
+				document.getElementById('noonestream').style.display = 'flex'
 			}
 		}
-	' "$topic" "$not_in_next" "$not_in_master"
-	exit 1
-fi
+	}
 
-<<\DOC_END
+	let ws = new WebSocket(StreamWebsocketAddr)
+	pc.onicecandidate = e => {
+		if (!e.candidate) {
+			return
+		}
 
-This sample hook safeguards topic branches that have been
-published from being rewound.
+		ws.send(JSON.stringify({
+			event: 'candidate',
+			data: JSON.stringify(e.candidate)
+		}))
+	}
 
-The workflow assumed here is:
+	ws.addEventListener('error', function (event) {
+		console.log('error: ', event)
+	})
 
- * Once a topic branch forks from "master", "master" is never
-   merged into it again (either directly or indirectly).
+	ws.onclose = function (evt) {
+		console.log("websocket has closed")
+		pc.close();
+		pc = null;
+		pr = document.getElementById('videos')
+		while (pr.childElementCount > 2) {
+			pr.lastChild.remove()
+		}
+		document.getElementById('noonestream').style.display = 'none'
+		document.getElementById('nocon').style.display = 'flex'
+		setTimeout(function () {
+			connectStream();
+		}, 1000);
+	}
 
- * Once a topic branch is fully cooked and merged into "master",
-   it is deleted.  If you need to build on top of it to correct
-   earlier mistakes, a new topic branch is created by forking at
-   the tip of the "master".  This is not strictly necessary, but
-   it makes it easier to keep your history simple.
+	ws.onmessage = function (evt) {
+		let msg = JSON.parse(evt.data)
+		if (!msg) {
+			return console.log('failed to parse msg')
+		}
 
- * Whenever you need to test or publish your changes to topic
-   branches, merge them into "next" branch.
+		switch (msg.event) {
+			case 'offer':
+				let offer = JSON.parse(msg.data)
+				if (!offer) {
+					return console.log('failed to parse answer')
+				}
+				pc.setRemoteDescription(offer)
+				pc.createAnswer().then(answer => {
+					pc.setLocalDescription(answer)
+					ws.send(JSON.stringify({
+						event: 'answer',
+						data: JSON.stringify(answer)
+					}))
+				})
+				return
 
-The script, being an example, hardcodes the publish branch name
-to be "next", but it is trivial to make it configurable via
-$GIT_DIR/config mechanism.
+			case 'candidate':
+				let candidate = JSON.parse(msg.data)
+				if (!candidate) {
+					return console.log('failed to parse candidate')
+				}
 
-With this workflow, you would want to know:
+				pc.addIceCandidate(candidate)
+		}
+	}
 
-(1) ... if a topic branch has ever been merged to "next".  Young
-    topic branches can have stupid mistakes you would rather
-    clean up before publishing, and things that have not been
-    merged into other branches can be easily rebased without
-    affecting other people.  But once it is published, you would
-    not want to rewind it.
-
-(2) ... if a topic branch has been fully merged to "master".
-    Then you can delete it.  More importantly, you should not
-    build on top of it -- other people may already want to
-    change things related to the topic as patches against your
-    "master", so if you need further changes, it is better to
-    fork the topic (perhaps with the same name) afresh from the
-    tip of "master".
-
-Let's look at this example:
-
-		   o---o---o---o---o---o---o---o---o---o "next"
-		  /       /           /           /
-		 /   a---a---b A     /           /
-		/   /               /           /
-	       /   /   c---c---c---c B         /
-	      /   /   /             \         /
-	     /   /   /   b---b C     \       /
-	    /   /   /   /             \     /
-    ---o---o---o---o---o---o---o---o---o---o---o "master"
-
-
-A, B and C are topic branches.
-
- * A has one fix since it was merged up to "next".
-
- * B has finished.  It has been fully merged up to "master" and "next",
-   and is ready to be deleted.
-
- * C has not merged to "next" at all.
-
-We would want to allow C to be rebased, refuse A, and encourage
-B to be deleted.
-
-To compute (1):
-
-	git rev-list ^master ^topic next
-	git rev-list ^master        next
-
-	if these match, topic has not merged in next at all.
-
-To compute (2):
-
-	git rev-list master..topic
-
-	if this is empty, it is fully merged to "master".
-
-DOC_END
-
-# main/.git/hooks/sendemail-validate.sample
-#!/bin/sh
-
-# An example hook script to validate a patch (and/or patch series) before
-# sending it via email.
-#
-# The hook should exit with non-zero status after issuing an appropriate
-# message if it wants to prevent the email(s) from being sent.
-#
-# To enable this hook, rename this file to "sendemail-validate".
-#
-# By default, it will only check that the patch(es) can be applied on top of
-# the default upstream branch without conflicts in a secondary worktree. After
-# validation (successful or not) of the last patch of a series, the worktree
-# will be deleted.
-#
-# The following config variables can be set to change the default remote and
-# remote ref that are used to apply the patches against:
-#
-#   sendemail.validateRemote (default: origin)
-#   sendemail.validateRemoteRef (default: HEAD)
-#
-# Replace the TODO placeholders with appropriate checks according to your
-# needs.
-
-validate_cover_letter () {
-	file="$1"
-	# TODO: Replace with appropriate checks (e.g. spell checking).
-	true
+	ws.onerror = function (evt) {
+		console.log("error: " + evt.data)
+	}
 }
 
-validate_patch () {
-	file="$1"
-	# Ensure that the patch applies without conflicts.
-	git am -3 "$file" || return
-	# TODO: Replace with appropriate checks for this patch
-	# (e.g. checkpatch.pl).
-	true
+connectStream();
+
+# assets/javascript/register.js
+var isSafari = window.safari !== undefined
+
+if ('serviceWorker' in navigator) {
+  if (isSafari) { // if it's safari, disable current service workers and don't start a service worker.
+    navigator.serviceWorker.getRegistrations().then(function (registrations) {
+      for (let registration of registrations) {
+        registration.unregister()
+      }
+    })
+  } else {
+    navigator.serviceWorker.register("/sw.js").then(registration => {
+      console.log('service worker registered:', registration);
+    }).catch(error => {
+      console.log('service worker error:', error)
+    })
+  }
 }
 
-validate_series () {
-	# TODO: Replace with appropriate checks for the whole series
-	# (e.g. quick build, coding style checks, etc.).
-	true
+# assets/javascript/viewer.js
+function connectViewer() {
+    viewerCount = document.getElementById("viewer-count");
+    viewerWs = new WebSocket(ViewerWebsocketAddr);
+
+    viewerWs.onclose = function (evt) {
+        console.log("websocket has closed");
+        viewerCount.innerHTML = "0";
+        setTimeout(function () {
+            connectViewer();
+        }, 1000);
+    }
+
+    viewerWs.onmessage = function (evt) {
+        d = evt.data
+        if (d === parseInt(d, 10)) {
+            return
+        }
+        viewerCount.innerHTML = d;
+    }
+
+    viewerWs.onerror = function (evt) {
+        console.log("error: " + evt.data)
+    } 
 }
 
-# main -------------------------------------------------------------------------
+connectViewer();
 
-if test "$GIT_SENDEMAIL_FILE_COUNTER" = 1
-then
-	remote=$(git config --default origin --get sendemail.validateRemote) &&
-	ref=$(git config --default HEAD --get sendemail.validateRemoteRef) &&
-	worktree=$(mktemp --tmpdir -d sendemail-validate.XXXXXXX) &&
-	git worktree add -fd --checkout "$worktree" "refs/remotes/$remote/$ref" &&
-	git config --replace-all sendemail.validateWorktree "$worktree"
-else
-	worktree=$(git config --get sendemail.validateWorktree)
-fi || {
-	echo "sendemail-validate: error: failed to prepare worktree" >&2
-	exit 1
+# assets/javascript/chat.js
+let chatWs = null;
+
+document.addEventListener('DOMContentLoaded', () => {
+    const msg = document.getElementById("msg");
+    const log = document.getElementById("log");
+    const scroller = document.querySelector('#chat .body');
+    const form = document.getElementById("form");
+
+    function currentTime() {
+        const d = new Date();
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        return `${hh}:${mm}`;
+    }
+
+    function appendLine(text) {
+        const item = document.createElement("div");
+        item.innerText = text;
+        log.appendChild(item);
+        scroller.scrollTop = scroller.scrollHeight; // вровень с последним сообщением
+    }
+
+    form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (!chatWs || chatWs.readyState !== WebSocket.OPEN) return;
+        const text = msg.value.trim();
+        if (!text) return;
+        chatWs.send(text);
+        msg.value = "";
+    });
+
+    function connectChat() {
+        chatWs = new WebSocket(ChatWebsocketAddr);
+
+        chatWs.onclose = () => {
+            setTimeout(connectChat, 1000);
+        };
+
+        chatWs.onmessage = (evt) => {
+            const messages = evt.data.split('\n');
+            for (const m of messages) {
+                appendLine(`${currentTime()} - ${m}`);
+            }
+        };
+
+        chatWs.onerror = (evt) => {
+            console.log("error:", evt);
+        };
+    }
+
+    connectChat();
+});
+
+# assets/javascript/peer.js
+function copyToClipboard(text) {
+    if (window.clipboardData && window.clipboardData.setData) {
+        clipboardData.setData("Text", text);
+        return Swal.fire({
+            position: 'top-end',
+            text: "Copied",
+            showConfirmButton: false,
+            timer: 1000,
+            width: '150px'
+        })
+    } else if (document.queryCommandSupported && document.queryCommandSupported("copy")) {
+        var textarea = document.createElement("textarea");
+        textarea.textContent = text;
+        textarea.style.position = "fixed";
+        document.body.appendChild(textarea);
+        textarea.select();
+        try {
+            document.execCommand("copy");
+            return Swal.fire({
+                position: 'top-end',
+                text: "Copied",
+                showConfirmButton: false,
+                timer: 1000,
+                width: '150px'
+            })
+        } catch (ex) {
+            console.warn("Copy to clipboard failed.", ex);
+            return false;
+        } finally {
+            document.body.removeChild(textarea);
+        }
+    }
 }
 
-unset GIT_DIR GIT_WORK_TREE
-cd "$worktree" &&
+document.addEventListener('DOMContentLoaded', () => {
+    (document.querySelectorAll('.notification .delete') || []).forEach(($delete) => {
+        const $notification = $delete.parentNode;
+        $delete.addEventListener('click', () => {
+            $notification.style.display = 'none'
+        });
+    });
+});
 
-if grep -q "^diff --git " "$1"
-then
-	validate_patch "$1"
-else
-	validate_cover_letter "$1"
-fi &&
+function connect(stream) {
+    document.getElementById('peers').style.display = 'block';
+    document.getElementById('noperm').style.display = 'none';
 
-if test "$GIT_SENDEMAIL_FILE_COUNTER" = "$GIT_SENDEMAIL_FILE_TOTAL"
-then
-	git config --unset-all sendemail.validateWorktree &&
-	trap 'git worktree remove -ff "$worktree"' EXIT &&
-	validate_series
-fi
+    const turnHost = "turn." + window.location.hostname;
 
-# main/.git/hooks/pre-commit.sample
-#!/bin/sh
-#
-# An example hook script to verify what is about to be committed.
-# Called by "git commit" with no arguments.  The hook should
-# exit with non-zero status after issuing an appropriate message if
-# it wants to stop the commit.
-#
-# To enable this hook, rename this file to "pre-commit".
+    let pc = new RTCPeerConnection({
+        iceServers: [
+            {urls: "stun:stun.l.google.com:19302"},
+            {urls: "turn:" + turnHost + ":3478", username: "gonnekone", credential: "gonnekone"}
+        ]
+    });
 
-if git rev-parse --verify HEAD >/dev/null 2>&1
-then
-	against=HEAD
-else
-	# Initial commit: diff against an empty tree object
-	against=$(git hash-object -t tree /dev/null)
-fi
+    pc.ontrack = (e) => {
+        const s = e.streams && e.streams[0];
+        if (!s) return;
 
-# If you want to allow non-ASCII filenames set this variable to true.
-allownonascii=$(git config --type=bool hooks.allownonascii)
+        if (window.localStream && s.id === window.localStream.id) {
+            return;
+        }
 
-# Redirect output to stderr.
-exec 1>&2
+        // аудиотрек — создаём audio элемент
+        // if (e.track.kind === 'audio') {
+        //     const audioId = `audio-${s.id}`;
+        //     if (!document.getElementById(audioId)) {
+        //         const audio = document.createElement('audio');
+        //         audio.id = audioId;
+        //         audio.autoplay = true;
+        //         audio.srcObject = s;
+        //         document.body.appendChild(audio);
+        //     }
+        //     return;
+        // }
 
-# Cross platform projects tend to avoid non-ASCII filenames; prevent
-# them from being added to the repository. We exploit the fact that the
-# printable range starts at the space character and ends with tilde.
-if [ "$allownonascii" != "true" ] &&
-	# Note that the use of brackets around a tr range is ok here, (it's
-	# even required, for portability to Solaris 10's /usr/bin/tr), since
-	# the square bracket bytes happen to fall in the designated range.
-	test $(git diff-index --cached --name-only --diff-filter=A -z $against |
-	  LC_ALL=C tr -d '[ -~]\0' | wc -c) != 0
-then
-	cat <<\EOF
-Error: Attempt to add a non-ASCII file name.
+        // Создаём DOM-элемент только по video-треку
+        if (e.track.kind !== 'video') return;
 
-This can cause problems if you want to work with people on other platforms.
+        const videos = document.getElementById('videos');
+        const id = `remote-${s.id}`;
 
-To be portable it is advisable to rename the file.
+        let wrapper = document.getElementById(id);
+        let el;
+        if (!wrapper) {
+            wrapper = document.createElement('div');
+            wrapper.className = 'column is-6 peer';
+            wrapper.id = id;
 
-If you know what you are doing you can disable this check using:
+            el = document.createElement('video');
+            el.autoplay = true;
+            el.playsInline = true;
+            el.controls = true;
 
-  git config hooks.allownonascii true
-EOF
-	exit 1
-fi
+            wrapper.appendChild(el);
+            document.getElementById('noone').style.display = 'none';
+            document.getElementById('nocon').style.display = 'none';
+            videos.appendChild(wrapper);
 
-# If there are whitespace errors, print the offending file names and fail.
-exec git diff-index --check --cached $against --
+            // Автоплей-фолбэк
+            const tryPlay = setInterval(() => {
+                el.play().then(() => clearInterval(tryPlay)).catch(() => {
+                });
+            }, 1500);
+        } else {
+            el = wrapper.querySelector('video');
+        }
 
-# main/.git/hooks/applypatch-msg.sample
-#!/bin/sh
-#
-# An example hook script to check the commit log message taken by
-# applypatch from an e-mail message.
-#
-# The hook should exit with non-zero status after issuing an
-# appropriate message if it wants to stop the commit.  The hook is
-# allowed to edit the commit message file.
-#
-# To enable this hook, rename this file to "applypatch-msg".
+        if (el.srcObject !== s) el.srcObject = s;
 
-. git-sh-setup
-commitmsg="$(git rev-parse --git-path hooks/commit-msg)"
-test -x "$commitmsg" && exec "$commitmsg" ${1+"$@"}
-:
+        e.track.onmute = () => {
+            el.play().catch(() => {
+            });
+        };
 
-# main/.git/hooks/fsmonitor-watchman.sample
-#!/usr/bin/perl
+        // s.addEventListener('removetrack', () => {
+        //     const node = document.getElementById(id);
+        //     if (node) node.remove();
+        //     // убираем аудио элемент
+        //     const audioNode = document.getElementById(`audio-${s.id}`);
+        //     if (audioNode) audioNode.remove();
+        //     if (videos.childElementCount <= 3) {
+        //         document.getElementById('noone').style.display = 'grid';
+        //         document.getElementById('noonein').style.display = 'grid';
+        //     }
+        // });
 
-use strict;
-use warnings;
-use IPC::Open2;
+        // Удаляем DOM, когда у потока убирают трек
+        s.addEventListener('removetrack', () => {
+            const node = document.getElementById(id);
+            if (node && node.parentNode) node.parentNode.remove();
+            if (videos.childElementCount <= 3) {
+                document.getElementById('noone').style.display = 'grid';
+                document.getElementById('noonein').style.display = 'grid';
+            }
+        });
+    };
 
-# An example hook script to integrate Watchman
-# (https://facebook.github.io/watchman/) with git to speed up detecting
-# new and modified files.
-#
-# The hook is passed a version (currently 2) and last update token
-# formatted as a string and outputs to stdout a new update token and
-# all files that have been modified since the update token. Paths must
-# be relative to the root of the working tree and separated by a single NUL.
-#
-# To enable this hook, rename this file to "query-watchman" and set
-# 'git config core.fsmonitor .git/hooks/query-watchman'
-#
-my ($version, $last_update_token) = @ARGV;
+    // Отправляем локальные треки
+    stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-# Uncomment for debugging
-# print STDERR "$0 $version $last_update_token\n";
+    // WebSocket сигналинг
+    let ws = new WebSocket(RoomWebsocketAddr);
 
-# Check the hook interface version
-if ($version ne 2) {
-	die "Unsupported query-fsmonitor hook version '$version'.\n" .
-	    "Falling back to scanning...\n";
+    pc.onicecandidate = e => {
+        if (!e.candidate) return;
+        ws.send(JSON.stringify({
+            event: 'candidate',
+            data: JSON.stringify(e.candidate)
+        }));
+    };
+
+    ws.addEventListener('error', (event) => {
+        console.log('error: ', event);
+    });
+
+    ws.onclose = function () {
+        console.log("websocket has closed");
+        pc.close();
+        pc = null;
+        const pr = document.getElementById('videos');
+        // Сносим удалённые видео-элементы (оставляем базовые 3+ колонки)
+        while (pr.childElementCount > 3) {
+            pr.lastChild.remove();
+        }
+        document.getElementById('noone').style.display = 'none';
+        document.getElementById('nocon').style.display = 'flex';
+        setTimeout(function () {
+            connect(stream);
+        }, 1000);
+    };
+
+    ws.onmessage = function (evt) {
+        const msg = JSON.parse(evt.data);
+        if (!msg) {
+            return console.log('failed to parse msg');
+        }
+
+        switch (msg.event) {
+            case 'offer': {
+                const offer = JSON.parse(msg.data);
+                if (!offer) {
+                    return console.log('failed to parse offer');
+                }
+                pc.setRemoteDescription(offer);
+                pc.createAnswer().then(answer => {
+                    pc.setLocalDescription(answer);
+                    ws.send(JSON.stringify({
+                        event: 'answer',
+                        data: JSON.stringify(answer)
+                    }));
+                });
+                return;
+            }
+            case 'candidate': {
+                const candidate = JSON.parse(msg.data);
+                if (!candidate) {
+                    return console.log('failed to parse candidate');
+                }
+                pc.addIceCandidate(candidate);
+                return;
+            }
+        }
+    };
+
+    ws.onerror = function (evt) {
+        console.log("error: " + evt.data);
+    };
 }
 
-my $git_work_tree = get_working_dir();
-
-my $retry = 1;
-
-my $json_pkg;
-eval {
-	require JSON::XS;
-	$json_pkg = "JSON::XS";
-	1;
-} or do {
-	require JSON::PP;
-	$json_pkg = "JSON::PP";
+// Получаем локальный стрим и сохраняем глобально для дедупа
+const audioConstraints = {
+    sampleSize: 16,
+    channelCount: 2,
+    echoCancellation: true
 };
 
-launch_watchman();
+navigator.mediaDevices.getUserMedia({
+    video: {
+        width: {max: 1280},
+        height: {max: 720},
+        aspectRatio: 4 / 3,
+        frameRate: 30,
+    },
+    audio: audioConstraints
+})
+    .catch(() => {
+        // камеры нет — пробуем только аудио
+        console.log('no camera, falling back to audio only');
+        return navigator.mediaDevices.getUserMedia({audio: audioConstraints});
+    })
+    .then(stream => {
+        window.localStream = stream;
+        document.getElementById('localVideo').srcObject = stream;
+        connect(stream);
+    })
+    .catch(err => {
+        // нет ни камеры ни микрофона — всё равно подключаем без медиа
+        console.log('no media devices:', err);
+        connect(new MediaStream());
+    });
 
-sub launch_watchman {
-	my $o = watchman_query();
-	if (is_work_tree_watched($o)) {
-		output_result($o->{clock}, @{$o->{files}});
-	}
+# assets/sw.js
+self.addEventListener('install', e => {
+  e.waitUntil(caches.open('static').then(cache => {
+    return cache.addAll([
+      '/favicon.ico',
+      '/icon.png',
+      '/javascript/chat.js',
+      '/javascript/peer.js',
+      '/javascript/stream.js',
+      '/javascript/viewer.js',
+      '/font/v.eot',
+      '/font/v.svg',
+      '/font/v.ttf',
+      '/font/v.woff',
+      '/font/v.woff2',
+      '/stylesheets/main.css',
+      '/stylesheets/fonts.css',
+      '/stylesheets/bulma/css/bulma.min.css'
+    ])
+  }))
+});
+
+self.addEventListener('fetch', (e) => {
+  console.log(e.request.url);
+  e.respondWith(
+    caches.match(e.request).then((response) => response || fetch(e.request)),
+  );
+});
+
+# assets/stylesheets/main.css
+@import "bulma/css/bulma.min.css";
+@import "fonts.css";
+
+html {
+    height: 100%;
 }
 
-sub output_result {
-	my ($clockid, @files) = @_;
-
-	# Uncomment for debugging watchman output
-	# open (my $fh, ">", ".git/watchman-output.out");
-	# binmode $fh, ":utf8";
-	# print $fh "$clockid\n@files\n";
-	# close $fh;
-
-	binmode STDOUT, ":utf8";
-	print $clockid;
-	print "\0";
-	local $, = "\0";
-	print @files;
+.title {
+    font-size: xx-large;
 }
 
-sub watchman_clock {
-	my $response = qx/watchman clock "$git_work_tree"/;
-	die "Failed to get clock id on '$git_work_tree'.\n" .
-		"Falling back to scanning...\n" if $? != 0;
-
-	return $json_pkg->new->utf8->decode($response);
+.container {
+    width: 70%;
 }
 
-sub watchman_query {
-	my $pid = open2(\*CHLD_OUT, \*CHLD_IN, 'watchman -j --no-pretty')
-	or die "open2() failed: $!\n" .
-	"Falling back to scanning...\n";
-
-	# In the query expression below we're asking for names of files that
-	# changed since $last_update_token but not from the .git folder.
-	#
-	# To accomplish this, we're using the "since" generator to use the
-	# recency index to select candidate nodes and "fields" to limit the
-	# output to file names only. Then we're using the "expression" term to
-	# further constrain the results.
-	my $last_update_line = "";
-	if (substr($last_update_token, 0, 1) eq "c") {
-		$last_update_token = "\"$last_update_token\"";
-		$last_update_line = qq[\n"since": $last_update_token,];
-	}
-	my $query = <<"	END";
-		["query", "$git_work_tree", {$last_update_line
-			"fields": ["name"],
-			"expression": ["not", ["dirname", ".git"]]
-		}]
-	END
-
-	# Uncomment for debugging the watchman query
-	# open (my $fh, ">", ".git/watchman-query.json");
-	# print $fh $query;
-	# close $fh;
-
-	print CHLD_IN $query;
-	close CHLD_IN;
-	my $response = do {local $/; <CHLD_OUT>};
-
-	# Uncomment for debugging the watch response
-	# open ($fh, ">", ".git/watchman-response.json");
-	# print $fh $response;
-	# close $fh;
-
-	die "Watchman: command returned no output.\n" .
-	"Falling back to scanning...\n" if $response eq "";
-	die "Watchman: command returned invalid output: $response\n" .
-	"Falling back to scanning...\n" unless $response =~ /^\{/;
-
-	return $json_pkg->new->utf8->decode($response);
+hr {
+    height: 1px;
+    background-color: #a8b4e2;
+    border: none;
 }
 
-sub is_work_tree_watched {
-	my ($output) = @_;
-	my $error = $output->{error};
-	if ($retry > 0 and $error and $error =~ m/unable to resolve root .* directory (.*) is not watched/) {
-		$retry--;
-		my $response = qx/watchman watch "$git_work_tree"/;
-		die "Failed to make watchman watch '$git_work_tree'.\n" .
-		    "Falling back to scanning...\n" if $? != 0;
-		$output = $json_pkg->new->utf8->decode($response);
-		$error = $output->{error};
-		die "Watchman: $error.\n" .
-		"Falling back to scanning...\n" if $error;
-
-		# Uncomment for debugging watchman output
-		# open (my $fh, ">", ".git/watchman-output.out");
-		# close $fh;
-
-		# Watchman will always return all files on the first query so
-		# return the fast "everything is dirty" flag to git and do the
-		# Watchman query just to get it over with now so we won't pay
-		# the cost in git to look up each individual file.
-		my $o = watchman_clock();
-		$error = $output->{error};
-
-		die "Watchman: $error.\n" .
-		"Falling back to scanning...\n" if $error;
-
-		output_result($o->{clock}, ("/"));
-		$last_update_token = $o->{clock};
-
-		eval { launch_watchman() };
-		return 0;
-	}
-
-	die "Watchman: $error.\n" .
-	"Falling back to scanning...\n" if $error;
-
-	return 1;
+body {
+    background-color: #a8b4e2;
+    min-height: 100%;
+    font-size: large;
 }
 
-sub get_working_dir {
-	my $working_dir;
-	if ($^O =~ 'msys' || $^O =~ 'cygwin') {
-		$working_dir = Win32::GetCwd();
-		$working_dir =~ tr/\\/\//;
-	} else {
-		require Cwd;
-		$working_dir = Cwd::cwd();
-	}
-
-	return $working_dir;
+footer {
+    color: #a8b4e2;
+    font-size: medium;
 }
 
-# main/.git/hooks/pre-receive.sample
-#!/bin/sh
-#
-# An example hook script to make use of push options.
-# The example simply echoes all push options that start with 'echoback='
-# and rejects all pushes when the "reject" push option is used.
-#
-# To enable this hook, rename this file to "pre-receive".
-
-if test -n "$GIT_PUSH_OPTION_COUNT"
-then
-	i=0
-	while test "$i" -lt "$GIT_PUSH_OPTION_COUNT"
-	do
-		eval "value=\$GIT_PUSH_OPTION_$i"
-		case "$value" in
-		echoback=*)
-			echo "echo from the pre-receive-hook: ${value#*=}" >&2
-			;;
-		reject)
-			exit 1
-		esac
-		i=$((i + 1))
-	done
-fi
-
-# main/.git/hooks/prepare-commit-msg.sample
-#!/bin/sh
-#
-# An example hook script to prepare the commit log message.
-# Called by "git commit" with the name of the file that has the
-# commit message, followed by the description of the commit
-# message's source.  The hook's purpose is to edit the commit
-# message file.  If the hook fails with a non-zero status,
-# the commit is aborted.
-#
-# To enable this hook, rename this file to "prepare-commit-msg".
-
-# This hook includes three examples. The first one removes the
-# "# Please enter the commit message..." help message.
-#
-# The second includes the output of "git diff --name-status -r"
-# into the message, just before the "git status" output.  It is
-# commented because it doesn't cope with --amend or with squashed
-# commits.
-#
-# The third example adds a Signed-off-by line to the message, that can
-# still be edited.  This is rarely a good idea.
-
-COMMIT_MSG_FILE=$1
-COMMIT_SOURCE=$2
-SHA1=$3
-
-/usr/bin/perl -i.bak -ne 'print unless(m/^. Please enter the commit message/..m/^#$/)' "$COMMIT_MSG_FILE"
-
-# case "$COMMIT_SOURCE,$SHA1" in
-#  ,|template,)
-#    /usr/bin/perl -i.bak -pe '
-#       print "\n" . `git diff --cached --name-status -r`
-# 	 if /^#/ && $first++ == 0' "$COMMIT_MSG_FILE" ;;
-#  *) ;;
-# esac
-
-# SOB=$(git var GIT_COMMITTER_IDENT | sed -n 's/^\(.*>\).*$/Signed-off-by: \1/p')
-# git interpret-trailers --in-place --trailer "$SOB" "$COMMIT_MSG_FILE"
-# if test -z "$COMMIT_SOURCE"
-# then
-#   /usr/bin/perl -i.bak -pe 'print "\n" if !$first_line++' "$COMMIT_MSG_FILE"
-# fi
-
-# main/.git/hooks/post-update.sample
-#!/bin/sh
-#
-# An example hook script to prepare a packed repository for use over
-# dumb transports.
-#
-# To enable this hook, rename this file to "post-update".
-
-exec git update-server-info
-
-# main/.git/hooks/pre-merge-commit.sample
-#!/bin/sh
-#
-# An example hook script to verify what is about to be committed.
-# Called by "git merge" with no arguments.  The hook should
-# exit with non-zero status after issuing an appropriate message to
-# stderr if it wants to stop the merge commit.
-#
-# To enable this hook, rename this file to "pre-merge-commit".
-
-. git-sh-setup
-test -x "$GIT_DIR/hooks/pre-commit" &&
-        exec "$GIT_DIR/hooks/pre-commit"
-:
-
-# main/.git/hooks/pre-applypatch.sample
-#!/bin/sh
-#
-# An example hook script to verify what is about to be committed
-# by applypatch from an e-mail message.
-#
-# The hook should exit with non-zero status after issuing an
-# appropriate message if it wants to stop the commit.
-#
-# To enable this hook, rename this file to "pre-applypatch".
-
-. git-sh-setup
-precommit="$(git rev-parse --git-path hooks/pre-commit)"
-test -x "$precommit" && exec "$precommit" ${1+"$@"}
-:
-
-# main/.git/hooks/pre-push.sample
-#!/bin/sh
-
-# An example hook script to verify what is about to be pushed.  Called by "git
-# push" after it has checked the remote status, but before anything has been
-# pushed.  If this script exits with a non-zero status nothing will be pushed.
-#
-# This hook is called with the following parameters:
-#
-# $1 -- Name of the remote to which the push is being done
-# $2 -- URL to which the push is being done
-#
-# If pushing without using a named remote those arguments will be equal.
-#
-# Information about the commits which are being pushed is supplied as lines to
-# the standard input in the form:
-#
-#   <local ref> <local oid> <remote ref> <remote oid>
-#
-# This sample shows how to prevent push of commits where the log message starts
-# with "WIP" (work in progress).
-
-remote="$1"
-url="$2"
-
-zero=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
-
-while read local_ref local_oid remote_ref remote_oid
-do
-	if test "$local_oid" = "$zero"
-	then
-		# Handle delete
-		:
-	else
-		if test "$remote_oid" = "$zero"
-		then
-			# New branch, examine all commits
-			range="$local_oid"
-		else
-			# Update to existing branch, examine new commits
-			range="$remote_oid..$local_oid"
-		fi
-
-		# Check for WIP commit
-		commit=$(git rev-list -n 1 --grep '^WIP' "$range")
-		if test -n "$commit"
-		then
-			echo >&2 "Found WIP commit in $local_ref, not pushing"
-			exit 1
-		fi
-	fi
-done
-
-exit 0
-
-# main/.git/hooks/update.sample
-#!/bin/sh
-#
-# An example hook script to block unannotated tags from entering.
-# Called by "git receive-pack" with arguments: refname sha1-old sha1-new
-#
-# To enable this hook, rename this file to "update".
-#
-# Config
-# ------
-# hooks.allowunannotated
-#   This boolean sets whether unannotated tags will be allowed into the
-#   repository.  By default they won't be.
-# hooks.allowdeletetag
-#   This boolean sets whether deleting tags will be allowed in the
-#   repository.  By default they won't be.
-# hooks.allowmodifytag
-#   This boolean sets whether a tag may be modified after creation. By default
-#   it won't be.
-# hooks.allowdeletebranch
-#   This boolean sets whether deleting branches will be allowed in the
-#   repository.  By default they won't be.
-# hooks.denycreatebranch
-#   This boolean sets whether remotely creating branches will be denied
-#   in the repository.  By default this is allowed.
-#
-
-# --- Command line
-refname="$1"
-oldrev="$2"
-newrev="$3"
-
-# --- Safety check
-if [ -z "$GIT_DIR" ]; then
-	echo "Don't run this script from the command line." >&2
-	echo " (if you want, you could supply GIT_DIR then run" >&2
-	echo "  $0 <ref> <oldrev> <newrev>)" >&2
-	exit 1
-fi
-
-if [ -z "$refname" -o -z "$oldrev" -o -z "$newrev" ]; then
-	echo "usage: $0 <ref> <oldrev> <newrev>" >&2
-	exit 1
-fi
-
-# --- Config
-allowunannotated=$(git config --type=bool hooks.allowunannotated)
-allowdeletebranch=$(git config --type=bool hooks.allowdeletebranch)
-denycreatebranch=$(git config --type=bool hooks.denycreatebranch)
-allowdeletetag=$(git config --type=bool hooks.allowdeletetag)
-allowmodifytag=$(git config --type=bool hooks.allowmodifytag)
-
-# check for no description
-projectdesc=$(sed -e '1q' "$GIT_DIR/description")
-case "$projectdesc" in
-"Unnamed repository"* | "")
-	echo "*** Project description file hasn't been set" >&2
-	exit 1
-	;;
-esac
-
-# --- Check types
-# if $newrev is 0000...0000, it's a commit to delete a ref.
-zero=$(git hash-object --stdin </dev/null | tr '[0-9a-f]' '0')
-if [ "$newrev" = "$zero" ]; then
-	newrev_type=delete
-else
-	newrev_type=$(git cat-file -t $newrev)
-fi
-
-case "$refname","$newrev_type" in
-	refs/tags/*,commit)
-		# un-annotated tag
-		short_refname=${refname##refs/tags/}
-		if [ "$allowunannotated" != "true" ]; then
-			echo "*** The un-annotated tag, $short_refname, is not allowed in this repository" >&2
-			echo "*** Use 'git tag [ -a | -s ]' for tags you want to propagate." >&2
-			exit 1
-		fi
-		;;
-	refs/tags/*,delete)
-		# delete tag
-		if [ "$allowdeletetag" != "true" ]; then
-			echo "*** Deleting a tag is not allowed in this repository" >&2
-			exit 1
-		fi
-		;;
-	refs/tags/*,tag)
-		# annotated tag
-		if [ "$allowmodifytag" != "true" ] && git rev-parse $refname > /dev/null 2>&1
-		then
-			echo "*** Tag '$refname' already exists." >&2
-			echo "*** Modifying a tag is not allowed in this repository." >&2
-			exit 1
-		fi
-		;;
-	refs/heads/*,commit)
-		# branch
-		if [ "$oldrev" = "$zero" -a "$denycreatebranch" = "true" ]; then
-			echo "*** Creating a branch is not allowed in this repository" >&2
-			exit 1
-		fi
-		;;
-	refs/heads/*,delete)
-		# delete branch
-		if [ "$allowdeletebranch" != "true" ]; then
-			echo "*** Deleting a branch is not allowed in this repository" >&2
-			exit 1
-		fi
-		;;
-	refs/remotes/*,commit)
-		# tracking branch
-		;;
-	refs/remotes/*,delete)
-		# delete tracking branch
-		if [ "$allowdeletebranch" != "true" ]; then
-			echo "*** Deleting a tracking branch is not allowed in this repository" >&2
-			exit 1
-		fi
-		;;
-	*)
-		# Anything else (is there anything else?)
-		echo "*** Update hook: unknown type of update to ref $refname of type $newrev_type" >&2
-		exit 1
-		;;
-esac
-
-# --- Finished
-exit 0
-
-# main/.git/hooks/push-to-checkout.sample
-#!/bin/sh
-
-# An example hook script to update a checked-out tree on a git push.
-#
-# This hook is invoked by git-receive-pack(1) when it reacts to git
-# push and updates reference(s) in its repository, and when the push
-# tries to update the branch that is currently checked out and the
-# receive.denyCurrentBranch configuration variable is set to
-# updateInstead.
-#
-# By default, such a push is refused if the working tree and the index
-# of the remote repository has any difference from the currently
-# checked out commit; when both the working tree and the index match
-# the current commit, they are updated to match the newly pushed tip
-# of the branch. This hook is to be used to override the default
-# behaviour; however the code below reimplements the default behaviour
-# as a starting point for convenient modification.
-#
-# The hook receives the commit with which the tip of the current
-# branch is going to be updated:
-commit=$1
-
-# It can exit with a non-zero status to refuse the push (when it does
-# so, it must not modify the index or the working tree).
-die () {
-	echo >&2 "$*"
-	exit 1
+footer .content {
+    margin-left: 10px;
 }
 
-# Or it can make any necessary changes to the working tree and to the
-# index to bring them to the desired state when the tip of the current
-# branch is updated to the new commit, and exit with a zero status.
-#
-# For example, the hook can simply run git read-tree -u -m HEAD "$1"
-# in order to emulate git fetch that is run in the reverse direction
-# with git push, as the two-tree form of git read-tree -u -m is
-# essentially the same as git switch or git checkout that switches
-# branches while keeping the local changes in the working tree that do
-# not interfere with the difference between the branches.
+#peers {
+    display: none;
+    padding-right: 5px;
+}
 
-# The below is a more-or-less exact translation to shell of the C code
-# for the default behaviour for git's push-to-checkout hook defined in
-# the push_to_deploy() function in builtin/receive-pack.c.
-#
-# Note that the hook will be executed from the repository directory,
-# not from the working tree, so if you want to perform operations on
-# the working tree, you will have to adapt your code accordingly, e.g.
-# by adding "cd .." or using relative paths.
+.mirror {
+    -o-transform: scaleX(-1);
+    -moz-transform: scaleX(-1);
+    -webkit-transform: scaleX(-1);
+    -ms-transform: scaleX(-1);
+    transform: scaleX(-1);
+}
 
-if ! git update-index -q --ignore-submodules --refresh
-then
-	die "Up-to-date check failed"
-fi
+video {
+    border-radius: 1%;
+    max-height: 50vh;
+    margin: 10px;
+    background-color: #a8b4e2;
+    box-shadow: 5px 5px #4d27a3;
+}
 
-if ! git diff-files --quiet --ignore-submodules --
-then
-	die "Working directory has unstaged changes"
-fi
+.video-options {
+    display: flex;
+    justify-content: space-between;
+    gap: 200px;
+}
 
-# This is a rough translation of:
-#
-#   head_has_history() ? "HEAD" : EMPTY_TREE_SHA1_HEX
-if git cat-file -e HEAD 2>/dev/null
-then
-	head=HEAD
-else
-	head=$(git hash-object -t tree --stdin </dev/null)
-fi
+.notif {
+    margin-top: 30px;
+    margin-bottom: 30px;
+    justify-content: center;
+    display: grid;
+    align-items: center;
+}
 
-if ! git diff-index --quiet --cached --ignore-submodules $head --
-then
-	die "Working directory has staged changes"
-fi
+/* CHAT: контейнер чата (заголовок + рамка) */
+#chat {
+    bottom: 20px;
+    right: 50px;
+    min-width: 600px;
+    z-index: 99;
+    display: flex;
+    flex-direction: column;
+}
 
-if ! git read-tree -u -m "$commit"
-then
-	die "Could not update working tree to new HEAD"
-fi
+/* CHAT: рамка в цвет тени видео */
+article.message.chat {
+    border: 2px solid #4d27a3;
+    border-radius: 6px;
+    box-shadow: 5px 5px #a8b4e2;
+}
+
+/* CHAT: заголовок вне рамки */
+.chat-title {
+    margin: 0 0 6px 6px;
+    font-weight: 600;
+}
+
+/* CHAT: единый внутренний отступ (сверху/снизу/по бокам одинаковый)
+        + промежуток между лентой и инпутом */
+#chat-content {
+    display: flex;
+    flex-direction: column;
+    padding: 10px; /* одинаковый отступ со всех сторон */
+    gap: 10px; /* расстояние между лентой сообщений и полем ввода */
+}
+
+/* CHAT: лента сообщений
+   - без скругления углов
+   - убран лишний нижний padding, чтобы скролл не уезжал ниже последнего сообщения */
+#chat .body {
+    flex: 1 1 auto;
+    display: block;
+    overflow-y: auto;
+    height: 30vh;
+    margin: 0; /* был margin: 10px */
+    padding: 0 6px 0 0; /* небольшой правый отступ под скроллбар */
+    border-radius: 0; /* без скругления */
+    word-wrap: break-word;
+}
+
+/* больше не добавляем искусственный зазор после последнего сообщения */
+#log > div:last-child {
+    margin-bottom: 0;
+}
+
+/* CHAT: форма без кнопки; инпут почти во всю ширину */
+.chat-form {
+    padding: 0;
+}
+
+.chat-input {
+    width: 100%;
+}
+
+.peer {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+#nocon {
+    display: none;
+}
+
+#noperm, #noonestream, #nostream {
+    justify-content: center;
+    display: grid;
+    height: 40vh;
+}
+
+.viewer {
+    margin-bottom: 20px;
+    display: grid;
+    justify-content: end;
+}
+
+/* красная точка больше не используется */
+#chat-alert {
+    display: none !important;
+    width: 12px;
+    height: 12px;
+}
+
+@media screen and (max-width: 850px) {
+    .container {
+        width: 95%;
+    }
+
+    #chat {
+        width: 100%;
+        right: 0;
+        bottom: 0;
+    }
+
+    article.message.chat {
+        border-radius: 0;
+    }
+}
+
+@media screen and (min-width: 850px) and (max-width: 1200px) {
+    .container {
+        width: 80%;
+    }
+
+    .chat {
+        width: 40%;
+    }
+
+    .navbar-item {
+        display: flex;
+    }
+
+    .navbar, .navbar-menu, .navbar-start, .navbar-end {
+        align-items: stretch;
+        display: flex;
+        padding: 0;
+    }
+
+    .navbar-menu {
+        flex-grow: 1;
+        flex-shrink: 0;
+    }
+
+    .navbar-start {
+        justify-content: flex-start;
+        margin-right: auto;
+    }
+
+    .navbar-end {
+        justify-content: flex-end;
+        margin-left: auto;
+    }
+
+    .navbar .container {
+        display: flex;
+    }
+
+    .navbar-item {
+        display: flex;
+        align-items: center;
+    }
+}
+
+@media screen and (min-width: 1300px) {
+    .container {
+        width: 70%;
+    }
+
+    #chat {
+        width: 23%;
+    }
+}
+
+# assets/stylesheets/fonts.css
+@font-face {
+  font-family: 'v';
+  src: url('../font/v.eot?44692591');
+  src: url('../font/v.eot?44692591#iefix') format('embedded-opentype'),
+       url('../font/v.woff2?44692591') format('woff2'),
+       url('../font/v.woff?44692591') format('woff'),
+       url('../font/v.ttf?44692591') format('truetype'),
+       url('../font/v.svg?44692591#v') format('svg');
+  font-weight: normal;
+  font-style: normal;
+}
+/* Chrome hack: SVG is rendered more smooth in Windozze. 100% magic, uncomment if you need it. */
+/* Note, that will break hinting! In other OS-es font will be not as sharp as it could be */
+/*
+@media screen and (-webkit-min-device-pixel-ratio:0) {
+  @font-face {
+    font-family: 'v';
+    src: url('../font/v.svg?44692591#v') format('svg');
+  }
+}
+*/
+ 
+ [class^="icon-"]:before, [class*=" icon-"]:before {
+  font-family: "v";
+  font-style: normal;
+  font-weight: normal;
+  speak: never;
+ 
+  text-decoration: inherit;
+  width: 1em;
+  margin-right: .2em;
+  text-align: center;
+  /* opacity: .8; */
+ 
+  /* For safety - reset parent styles, that can break glyph codes*/
+  font-variant: normal;
+  text-transform: none;
+ 
+  /* fix buttons height, for twitter bootstrap */
+  line-height: 1em;
+ 
+  /* Animation center compensation - margins should be symmetric */
+  /* remove if not needed */
+  margin-left: .2em;
+ 
+  /* you can be more comfortable with increased icons size */
+  /* font-size: 120%; */
+ 
+  /* Font smoothing. That was taken from TWBS */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+ 
+  /* Uncomment for 3D effect */
+  /* text-shadow: 1px 1px 1px rgba(127, 127, 127, 0.3); */
+}
+ 
+.icon-user:before { content: '\e800'; } /* '' */
+.icon-users:before { content: '\e801'; } /* '' */
 
 # pkg/.DS_Store
 
@@ -2345,10 +2922,13 @@ package webrtc
 import (
 	"encoding/json"
 	"fmt"
-	guuid "github.com/google/uuid"
 	"log"
 	"sync"
 	"time"
+
+	guuid "github.com/google/uuid"
+
+	"sync/atomic"
 
 	"github.com/gofiber/websocket/v2"
 	"github.com/pion/rtcp"
@@ -2380,6 +2960,12 @@ var (
 	}
 )
 
+type PeerConnectionState struct {
+	PeerConnection *webrtc.PeerConnection
+	Websocket      *ThreadSafeWriter
+	NoiseEnabled   atomic.Bool // true по умолчанию
+}
+
 type Room struct {
 	Peers *Peers
 	Hub   *chat.Hub
@@ -2390,11 +2976,6 @@ type Peers struct {
 	Connections []PeerConnectionState
 	TrackLocals map[string]*webrtc.TrackLocalStaticRTP
 	Publishers  map[string]*webrtc.PeerConnection // trackLocal.ID() -> кто опубликовал
-}
-
-type PeerConnectionState struct {
-	PeerConnection *webrtc.PeerConnection
-	Websocket      *ThreadSafeWriter
 }
 
 type ThreadSafeWriter struct {
@@ -2574,10 +3155,16 @@ import (
 	"log"
 	"os"
 	"sync"
+	"sync/atomic"
+	"v/internal/model"
 
 	"github.com/gofiber/websocket/v2"
+	"github.com/hraban/opus"
 	"github.com/pion/webrtc/v3"
 )
+
+// вместо 3 секунд — 200 мс
+const pcmBufferSize = model.SampleRate / 5
 
 func RoomConn(c *websocket.Conn, p *Peers) {
 	var config webrtc.Configuration
@@ -2607,25 +3194,21 @@ func RoomConn(c *websocket.Conn, p *Peers) {
 			Mutex: sync.Mutex{},
 		}}
 
-	// Add our new PeerConnection to global list
 	p.ListLock.Lock()
 	p.Connections = append(p.Connections, newPeer)
 	p.ListLock.Unlock()
 
 	log.Println(p.Connections)
 
-	// Trickle ICE. Emit server candidate to client
 	peerConnection.OnICECandidate(func(i *webrtc.ICECandidate) {
 		if i == nil {
 			return
 		}
-
 		candidateString, err := json.Marshal(i.ToJSON())
 		if err != nil {
 			log.Println(err)
 			return
 		}
-
 		if writeErr := newPeer.Websocket.WriteJSON(&websocketMessage{
 			Event: "candidate",
 			Data:  string(candidateString),
@@ -2634,33 +3217,44 @@ func RoomConn(c *websocket.Conn, p *Peers) {
 		}
 	})
 
-	// If PeerConnection is closed remove it from global list
 	peerConnection.OnConnectionStateChange(func(pp webrtc.PeerConnectionState) {
 		switch pp {
-		case webrtc.PeerConnectionStateFailed:
-			if err := peerConnection.Close(); err != nil {
-				log.Print(err)
+		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
+			log.Printf("Peer connection closed/failed")
+			p.ListLock.Lock()
+			// Удаляем именно это соединение
+			for i := range p.Connections {
+				if p.Connections[i].PeerConnection == peerConnection {
+					p.Connections = append(p.Connections[:i], p.Connections[i+1:]...)
+					break
+				}
 			}
-		case webrtc.PeerConnectionStateClosed:
+			p.ListLock.Unlock()
+
 			p.SignalPeerConnections()
 		}
 	})
 
 	peerConnection.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		// Create a track to fan out our incoming video to all peers
 		trackLocal := p.AddTrack(t, peerConnection)
 		if trackLocal == nil {
 			return
 		}
 		defer p.RemoveTrack(trackLocal)
 
+		// аудиотрек обрабатываем через модель шумоподавления
+		//if t.Kind() == webrtc.RTPCodecTypeAudio {
+		//	go passthroughAudio(t, trackLocal)
+		//	return
+		//}
+
+		// видеотрек — просто пересылаем без изменений
 		buf := make([]byte, 1500)
 		for {
 			i, _, err := t.Read(buf)
 			if err != nil {
 				return
 			}
-
 			if _, err = trackLocal.Write(buf[:i]); err != nil {
 				return
 			}
@@ -2686,7 +3280,6 @@ func RoomConn(c *websocket.Conn, p *Peers) {
 				log.Println(err)
 				return
 			}
-
 			if err := peerConnection.AddICECandidate(candidate); err != nil {
 				log.Println(err)
 				return
@@ -2697,11 +3290,117 @@ func RoomConn(c *websocket.Conn, p *Peers) {
 				log.Println(err)
 				return
 			}
-
 			if err := peerConnection.SetRemoteDescription(answer); err != nil {
 				log.Println(err)
 				return
 			}
+			//case "noise_toggle":
+			//	newPeer.NoiseEnabled.Store(message.Data == "true")
+			//	log.Printf("noise suppression: %s", message.Data)
+		}
+	}
+}
+
+// processAudioTrack читает RTP аудио, применяет шумоподавление и пишет в локальный трек
+func processAudioTrack(
+	remote *webrtc.TrackRemote,
+	local *webrtc.TrackLocalStaticRTP,
+	noiseEnabled *atomic.Bool,
+) {
+	// инициализируем Opus декодер: 48кГц, моно
+	dec, err := opus.NewDecoder(model.SampleRate, 1)
+	if err != nil {
+		log.Printf("opus decoder init: %v — audio passthrough", err)
+		passthroughAudio(remote, local)
+		return
+	}
+
+	// инициализируем Opus энкодер: 48кГц, моно, VoIP режим
+	enc, err := opus.NewEncoder(model.SampleRate, 1, opus.AppVoIP)
+	if err != nil {
+		log.Printf("opus encoder init: %v — audio passthrough", err)
+		passthroughAudio(remote, local)
+		return
+	}
+
+	// загружаем модель шумоподавления
+	suppressor, err := model.NewSuppressor("noisecanceletionmodel/modeldata/noise_suppressor.onnx")
+	if err != nil {
+		log.Printf("noise suppressor init: %v — audio passthrough", err)
+		passthroughAudio(remote, local)
+		return
+	}
+	defer suppressor.Close()
+
+	log.Println("noise suppressor active")
+
+	// PCM буфер для накопления 3 секунд аудио
+	pcmBuffer := make([]float32, 0, pcmBufferSize)
+	// декодированный фрейм: Opus обычно 20мс = 960 семплов при 48кГц
+	pcmFrame := make([]float32, 960)
+	rtpBuf := make([]byte, 1500)
+
+	for {
+		n, _, err := remote.Read(rtpBuf)
+		if err != nil {
+			return
+		}
+
+		// декодируем Opus → PCM
+		samplesDecoded, err := dec.DecodeFloat32(rtpBuf[:n], pcmFrame)
+		if err != nil {
+			log.Printf("opus decode: %v", err)
+			continue
+		}
+
+		pcmBuffer = append(pcmBuffer, pcmFrame[:samplesDecoded]...)
+
+		// когда набрали 3 секунды — применяем шумоподавление
+		if len(pcmBuffer) < pcmBufferSize {
+			continue
+		}
+
+		chunk := make([]float32, pcmBufferSize)
+		copy(chunk, pcmBuffer[:pcmBufferSize])
+		pcmBuffer = pcmBuffer[pcmBufferSize:]
+
+		var denoised []float32
+		if noiseEnabled.Load() {
+			denoised, err = suppressor.Denoise(chunk)
+			if err != nil {
+				log.Printf("denoise: %v", err)
+				denoised = chunk // при ошибке отдаём исходный
+			}
+		} else {
+			denoised = chunk // просто пропускаем без обработки
+		}
+
+		// кодируем PCM обратно в Opus и пишем в локальный трек
+		encBuf := make([]byte, 1500)
+		frameSize := 960 // 20мс при 48кГц
+		for i := 0; i+frameSize <= len(denoised); i += frameSize {
+			encoded, err := enc.EncodeFloat32(denoised[i:i+frameSize], encBuf)
+			if err != nil {
+				log.Printf("opus encode: %v", err)
+				continue
+			}
+			if _, err = local.Write(encBuf[:encoded]); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// passthroughAudio — запасной вариант: просто пересылаем аудио без обработки
+func passthroughAudio(remote *webrtc.TrackRemote, local *webrtc.TrackLocalStaticRTP) {
+	buf := make([]byte, 1500)
+	for {
+		i, _, err := remote.Read(buf)
+		if err != nil {
+			return
+		}
+		if _, err = local.Write(buf[:i]); err != nil {
+			return
 		}
 	}
 }

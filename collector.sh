@@ -5,13 +5,15 @@ DIR="${1:-$HOME/GolandProjects/Videocall-Chat-GO-Project}"
 OUTPUT="${2:-output.txt}"
 
 EXCLUDES=(
-    "assets"
-    "go.mod"
+    "assets/font"
+    "assets/icon.png"
     "go.sum"
     ".git"
     "README.md"
     ".gitignore"
     ".gitmodules"
+    "main"
+    ".dockerignore"
     "LICENSE"
     ".idea"
     "collector.sh"
@@ -22,7 +24,6 @@ EXCLUDES=(
     "noisecanceletionmodel/speech-noise-dataset.zip"
     "noisecanceletionmodel/test_results"
     "noisecanceletionmodel/modeldata"
-    "views"
 )
 
 TEMP_OUTPUT=$(mktemp)

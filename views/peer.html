@@ -22,18 +22,21 @@
                     </div>
                     <div id="chat">
                         <h3 class="chat-title">Chat</h3>
-
                         <article class="message chat">
                             <div id="chat-content">
                                 <div class="body">
                                     <div id="log"></div>
                                 </div>
-
                                 <form id="form" class="chat-form" autocomplete="off">
                                     <input class="input chat-input" id="msg" type="text" placeholder="type message..."/>
                                 </form>
                             </div>
                         </article>
+<!--                        &lt;!&ndash; кнопка под чатом &ndash;&gt;-->
+<!--                        <button id="noiseBtn" onclick="toggleNoise()"-->
+<!--                                style="margin-top:8px; padding:8px 16px; cursor:pointer; background:#2ecc71; border:none; border-radius:4px; color:white; font-size:14px; width:100%;">-->
+<!--                            Шумоподавление: ВКЛ-->
+<!--                        </button>-->
                     </div>
                 </div>
             </div>
@@ -63,11 +66,6 @@
                 </article>
             </div>
         </div>
-
-        <!-- счётчик поверх ряда, справа, на линии верха видео/чата -->
-        <!--		<div class="viewer viewer-overlay">-->
-        <!--			<p class="icon-users" id="viewer-count"></p>-->
-        <!--		</div>-->
     </div>
 </div>
 
@@ -75,6 +73,20 @@
     let RoomWebsocketAddr = "{{.RoomWebsocketAddr}}"
     let ChatWebsocketAddr = "{{.ChatWebsocketAddr}}"
     let ViewerWebsocketAddr = "{{.ViewerWebsocketAddr}}"
+    let noiseEnabled = false;
+
+    function toggleNoise() {
+        const btn = document.getElementById('noiseBtn');
+        btn.style.background = noiseEnabled ? '#2ecc71' : '#e74c3c';
+        btn.textContent = noiseEnabled ? 'Шумоподавление: ВКЛ' : 'Шумоподавление: ВЫКЛ';
+
+        if (ws && ws.readyState === WebSocket.OPEN) {  // ← было conn, стало ws + проверка
+            ws.send(JSON.stringify({
+                event: 'noise_toggle',
+                data: noiseEnabled ? 'true' : 'false'
+            }));
+        }
+    }
 </script>
 <script src="/javascript/peer.js"></script>
 <script src="/javascript/chat.js"></script>

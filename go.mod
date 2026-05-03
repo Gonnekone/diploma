@@ -1,8 +1,6 @@
 module v
 
-go 1.24.4
-
-toolchain go1.24.11
+go 1.25.5
 
 require (
 	github.com/fasthttp/websocket v1.4.2
@@ -38,6 +36,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/cel-go v0.26.1 // indirect
+	github.com/hraban/opus v0.0.0-20251117090126-c76ea7e21bf3 // indirect
 	github.com/jxskiss/base62 v1.1.0 // indirect
 	github.com/klauspost/compress v1.18.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
@@ -46,6 +45,7 @@ require (
 	github.com/livekit/mageutil v0.0.0-20250511045019-0f1ff63f7731 // indirect
 	github.com/livekit/mediatransportutil v0.0.0-20251128105421-19c7a7b81c22 // indirect
 	github.com/livekit/psrpc v0.7.1 // indirect
+	github.com/madelynnblue/go-dsp v1.0.0 // indirect
 	github.com/magefile/mage v1.15.0 // indirect
 	github.com/moby/sys/user v0.3.0 // indirect
 	github.com/nats-io/nats.go v1.47.0 // indirect
@@ -84,6 +84,7 @@ require (
 	github.com/valyala/fasthttp v1.23.0 // indirect
 	github.com/valyala/tcplisten v0.0.0-20161114210144-ceec8f93295a // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
+	github.com/yalue/onnxruntime_go v1.28.0 // indirect
 	github.com/zeebo/xxh3 v1.0.2 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
