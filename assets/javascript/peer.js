@@ -209,34 +209,81 @@ function connect(stream) {
     };
 }
 
-// Получаем локальный стрим и сохраняем глобально для дедупа
+function createBlackVideoTrack() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 320;
+    canvas.height = 240;
+    // Прячем canvas
+    canvas.style.display = 'none';
+    document.body.appendChild(canvas);
+
+    const ctx = canvas.getContext('2d');
+    // Постоянная отрисовка чёрного кадра, чтобы поток не останавливался
+    const drawFrame = () => {
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        requestAnimationFrame(drawFrame);
+    };
+    drawFrame();
+
+    const blackStream = canvas.captureStream(30); // 30 fps
+    const videoTrack = blackStream.getVideoTracks()[0];
+
+    // Очистка canvas при завершении трека
+    videoTrack.addEventListener('ended', () => canvas.remove());
+
+    return videoTrack;
+}
+
 const audioConstraints = {
     sampleSize: 16,
     channelCount: 2,
     echoCancellation: true
 };
 
-navigator.mediaDevices.getUserMedia({
-    video: {
-        width: {max: 1280},
-        height: {max: 720},
-        aspectRatio: 4 / 3,
-        frameRate: 30,
-    },
-    audio: audioConstraints
-})
-    .catch(() => {
-        // камеры нет — пробуем только аудио
-        console.log('no camera, falling back to audio only');
-        return navigator.mediaDevices.getUserMedia({audio: audioConstraints});
-    })
-    .then(stream => {
-        window.localStream = stream;
-        document.getElementById('localVideo').srcObject = stream;
-        connect(stream);
-    })
-    .catch(err => {
-        // нет ни камеры ни микрофона — всё равно подключаем без медиа
-        console.log('no media devices:', err);
-        connect(new MediaStream());
-    });
+async function getLocalStream() {
+    // Пробуем получить полный набор (видео + аудио)
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                width: { max: 1280 },
+                height: { max: 720 },
+                aspectRatio: 4 / 3,
+                frameRate: 30,
+            },
+            audio: audioConstraints
+        });
+        return stream;
+    } catch (e) {
+        console.log('No camera or both devices missing:', e);
+        // Поток, который мы будем дополнять
+        const stream = new MediaStream();
+        // Сразу добавляем чёрное видео
+        stream.addTrack(createBlackVideoTrack());
+
+        // Пытаемся добавить аудио, если микрофон доступен
+        try {
+            const audioStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+            audioStream.getAudioTracks().forEach(track => stream.addTrack(track));
+        } catch (audioErr) {
+            console.log('No microphone either');
+        }
+
+        return stream;
+    }
+}
+
+// Использование
+getLocalStream().then(stream => {
+    window.localStream = stream;
+    document.getElementById('localVideo').srcObject = stream;
+    connect(stream);
+}).catch(err => {
+    // Вообще ничего не вышло — чёрный видеотрек в любом случае создан в getLocalStream
+    console.error('Unexpected error', err);
+    const fallbackStream = new MediaStream();
+    fallbackStream.addTrack(createBlackVideoTrack());
+    window.localStream = fallbackStream;
+    document.getElementById('localVideo').srcObject = fallbackStream;
+    connect(fallbackStream);
+});
