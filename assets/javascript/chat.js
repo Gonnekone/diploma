@@ -17,7 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const item = document.createElement("div");
         item.innerText = text;
         log.appendChild(item);
-        scroller.scrollTop = scroller.scrollHeight; // вровень с последним сообщением
+        scroller.scrollTop = scroller.scrollHeight;
     }
 
     form.addEventListener('submit', (e) => {

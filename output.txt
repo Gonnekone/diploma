@@ -1663,11 +1663,6 @@ vc.158.160.8.131.sslip.io {
                                 </form>
                             </div>
                         </article>
-<!--                        &lt;!&ndash; кнопка под чатом &ndash;&gt;-->
-<!--                        <button id="noiseBtn" onclick="toggleNoise()"-->
-<!--                                style="margin-top:8px; padding:8px 16px; cursor:pointer; background:#2ecc71; border:none; border-radius:4px; color:white; font-size:14px; width:100%;">-->
-<!--                            Шумоподавление: ВКЛ-->
-<!--                        </button>-->
                     </div>
                 </div>
             </div>
@@ -2301,37 +2296,84 @@ function connect(stream) {
     };
 }
 
-// Получаем локальный стрим и сохраняем глобально для дедупа
+function createBlackVideoTrack() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 320;
+    canvas.height = 240;
+    // Прячем canvas
+    canvas.style.display = 'none';
+    document.body.appendChild(canvas);
+
+    const ctx = canvas.getContext('2d');
+    // Постоянная отрисовка чёрного кадра, чтобы поток не останавливался
+    const drawFrame = () => {
+        ctx.fillStyle = 'black';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        requestAnimationFrame(drawFrame);
+    };
+    drawFrame();
+
+    const blackStream = canvas.captureStream(30); // 30 fps
+    const videoTrack = blackStream.getVideoTracks()[0];
+
+    // Очистка canvas при завершении трека
+    videoTrack.addEventListener('ended', () => canvas.remove());
+
+    return videoTrack;
+}
+
 const audioConstraints = {
     sampleSize: 16,
     channelCount: 2,
     echoCancellation: true
 };
 
-navigator.mediaDevices.getUserMedia({
-    video: {
-        width: {max: 1280},
-        height: {max: 720},
-        aspectRatio: 4 / 3,
-        frameRate: 30,
-    },
-    audio: audioConstraints
-})
-    .catch(() => {
-        // камеры нет — пробуем только аудио
-        console.log('no camera, falling back to audio only');
-        return navigator.mediaDevices.getUserMedia({audio: audioConstraints});
-    })
-    .then(stream => {
-        window.localStream = stream;
-        document.getElementById('localVideo').srcObject = stream;
-        connect(stream);
-    })
-    .catch(err => {
-        // нет ни камеры ни микрофона — всё равно подключаем без медиа
-        console.log('no media devices:', err);
-        connect(new MediaStream());
-    });
+async function getLocalStream() {
+    // Пробуем получить полный набор (видео + аудио)
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+                width: { max: 1280 },
+                height: { max: 720 },
+                aspectRatio: 4 / 3,
+                frameRate: 30,
+            },
+            audio: audioConstraints
+        });
+        return stream;
+    } catch (e) {
+        console.log('No camera or both devices missing:', e);
+        // Поток, который мы будем дополнять
+        const stream = new MediaStream();
+        // Сразу добавляем чёрное видео
+        stream.addTrack(createBlackVideoTrack());
+
+        // Пытаемся добавить аудио, если микрофон доступен
+        try {
+            const audioStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+            audioStream.getAudioTracks().forEach(track => stream.addTrack(track));
+        } catch (audioErr) {
+            console.log('No microphone either');
+        }
+
+        return stream;
+    }
+}
+
+// Использование
+getLocalStream().then(stream => {
+    window.localStream = stream;
+    document.getElementById('localVideo').srcObject = stream;
+    connect(stream);
+}).catch(err => {
+    // Вообще ничего не вышло — чёрный видеотрек в любом случае создан в getLocalStream
+    console.error('Unexpected error', err);
+    const fallbackStream = new MediaStream();
+    fallbackStream.addTrack(createBlackVideoTrack());
+    window.localStream = fallbackStream;
+    document.getElementById('localVideo').srcObject = fallbackStream;
+    connect(fallbackStream);
+});
 
 # assets/sw.js
 self.addEventListener('install', e => {
@@ -2928,8 +2970,6 @@ import (
 
 	guuid "github.com/google/uuid"
 
-	"sync/atomic"
-
 	"github.com/gofiber/websocket/v2"
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v3"
@@ -2963,7 +3003,6 @@ var (
 type PeerConnectionState struct {
 	PeerConnection *webrtc.PeerConnection
 	Websocket      *ThreadSafeWriter
-	NoiseEnabled   atomic.Bool // true по умолчанию
 }
 
 type Room struct {
@@ -3155,7 +3194,6 @@ import (
 	"log"
 	"os"
 	"sync"
-	"sync/atomic"
 	"v/internal/model"
 
 	"github.com/gofiber/websocket/v2"
@@ -3243,10 +3281,10 @@ func RoomConn(c *websocket.Conn, p *Peers) {
 		defer p.RemoveTrack(trackLocal)
 
 		// аудиотрек обрабатываем через модель шумоподавления
-		//if t.Kind() == webrtc.RTPCodecTypeAudio {
-		//	go passthroughAudio(t, trackLocal)
-		//	return
-		//}
+		if t.Kind() == webrtc.RTPCodecTypeAudio {
+			go processAudioTrack(t, trackLocal)
+			return
+		}
 
 		// видеотрек — просто пересылаем без изменений
 		buf := make([]byte, 1500)
@@ -3294,9 +3332,6 @@ func RoomConn(c *websocket.Conn, p *Peers) {
 				log.Println(err)
 				return
 			}
-			//case "noise_toggle":
-			//	newPeer.NoiseEnabled.Store(message.Data == "true")
-			//	log.Printf("noise suppression: %s", message.Data)
 		}
 	}
 }
@@ -3305,7 +3340,6 @@ func RoomConn(c *websocket.Conn, p *Peers) {
 func processAudioTrack(
 	remote *webrtc.TrackRemote,
 	local *webrtc.TrackLocalStaticRTP,
-	noiseEnabled *atomic.Bool,
 ) {
 	// инициализируем Opus декодер: 48кГц, моно
 	dec, err := opus.NewDecoder(model.SampleRate, 1)
@@ -3364,15 +3398,10 @@ func processAudioTrack(
 		copy(chunk, pcmBuffer[:pcmBufferSize])
 		pcmBuffer = pcmBuffer[pcmBufferSize:]
 
-		var denoised []float32
-		if noiseEnabled.Load() {
-			denoised, err = suppressor.Denoise(chunk)
-			if err != nil {
-				log.Printf("denoise: %v", err)
-				denoised = chunk // при ошибке отдаём исходный
-			}
-		} else {
-			denoised = chunk // просто пропускаем без обработки
+		denoised, err := suppressor.Denoise(chunk)
+		if err != nil {
+			log.Printf("denoise: %v", err)
+			denoised = chunk // при ошибке отдаём исходный
 		}
 
 		// кодируем PCM обратно в Opus и пишем в локальный трек

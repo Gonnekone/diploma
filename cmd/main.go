@@ -6,7 +6,7 @@ import (
 	"v/internal/server"
 )
 
-var Version = "dev" // перезаписывается при сборке через -ldflags
+var Version = "dev"
 
 func main() {
 	if err := server.Run(Version); err != nil {

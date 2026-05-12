@@ -62,20 +62,6 @@ function connect(stream) {
             return;
         }
 
-        // аудиотрек — создаём audio элемент
-        // if (e.track.kind === 'audio') {
-        //     const audioId = `audio-${s.id}`;
-        //     if (!document.getElementById(audioId)) {
-        //         const audio = document.createElement('audio');
-        //         audio.id = audioId;
-        //         audio.autoplay = true;
-        //         audio.srcObject = s;
-        //         document.body.appendChild(audio);
-        //     }
-        //     return;
-        // }
-
-        // Создаём DOM-элемент только по video-треку
         if (e.track.kind !== 'video') return;
 
         const videos = document.getElementById('videos');
@@ -98,7 +84,6 @@ function connect(stream) {
             document.getElementById('nocon').style.display = 'none';
             videos.appendChild(wrapper);
 
-            // Автоплей-фолбэк
             const tryPlay = setInterval(() => {
                 el.play().then(() => clearInterval(tryPlay)).catch(() => {
                 });
@@ -114,19 +99,6 @@ function connect(stream) {
             });
         };
 
-        // s.addEventListener('removetrack', () => {
-        //     const node = document.getElementById(id);
-        //     if (node) node.remove();
-        //     // убираем аудио элемент
-        //     const audioNode = document.getElementById(`audio-${s.id}`);
-        //     if (audioNode) audioNode.remove();
-        //     if (videos.childElementCount <= 3) {
-        //         document.getElementById('noone').style.display = 'grid';
-        //         document.getElementById('noonein').style.display = 'grid';
-        //     }
-        // });
-
-        // Удаляем DOM, когда у потока убирают трек
         s.addEventListener('removetrack', () => {
             const node = document.getElementById(id);
             if (node && node.parentNode) node.parentNode.remove();
@@ -137,10 +109,8 @@ function connect(stream) {
         });
     };
 
-    // Отправляем локальные треки
     stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-    // WebSocket сигналинг
     let ws = new WebSocket(RoomWebsocketAddr);
 
     pc.onicecandidate = e => {
@@ -160,7 +130,6 @@ function connect(stream) {
         pc.close();
         pc = null;
         const pr = document.getElementById('videos');
-        // Сносим удалённые видео-элементы (оставляем базовые 3+ колонки)
         while (pr.childElementCount > 3) {
             pr.lastChild.remove();
         }
@@ -213,12 +182,10 @@ function createBlackVideoTrack() {
     const canvas = document.createElement('canvas');
     canvas.width = 320;
     canvas.height = 240;
-    // Прячем canvas
     canvas.style.display = 'none';
     document.body.appendChild(canvas);
 
     const ctx = canvas.getContext('2d');
-    // Постоянная отрисовка чёрного кадра, чтобы поток не останавливался
     const drawFrame = () => {
         ctx.fillStyle = 'black';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -226,10 +193,9 @@ function createBlackVideoTrack() {
     };
     drawFrame();
 
-    const blackStream = canvas.captureStream(30); // 30 fps
+    const blackStream = canvas.captureStream(30);
     const videoTrack = blackStream.getVideoTracks()[0];
 
-    // Очистка canvas при завершении трека
     videoTrack.addEventListener('ended', () => canvas.remove());
 
     return videoTrack;
@@ -242,7 +208,6 @@ const audioConstraints = {
 };
 
 async function getLocalStream() {
-    // Пробуем получить полный набор (видео + аудио)
     try {
         const stream = await navigator.mediaDevices.getUserMedia({
             video: {
@@ -256,12 +221,9 @@ async function getLocalStream() {
         return stream;
     } catch (e) {
         console.log('No camera or both devices missing:', e);
-        // Поток, который мы будем дополнять
         const stream = new MediaStream();
-        // Сразу добавляем чёрное видео
         stream.addTrack(createBlackVideoTrack());
 
-        // Пытаемся добавить аудио, если микрофон доступен
         try {
             const audioStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
             audioStream.getAudioTracks().forEach(track => stream.addTrack(track));
@@ -273,13 +235,11 @@ async function getLocalStream() {
     }
 }
 
-// Использование
 getLocalStream().then(stream => {
     window.localStream = stream;
     document.getElementById('localVideo').srcObject = stream;
     connect(stream);
 }).catch(err => {
-    // Вообще ничего не вышло — чёрный видеотрек в любом случае создан в getLocalStream
     console.error('Unexpected error', err);
     const fallbackStream = new MediaStream();
     fallbackStream.addTrack(createBlackVideoTrack());

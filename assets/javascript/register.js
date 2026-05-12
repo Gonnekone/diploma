@@ -1,7 +1,7 @@
 var isSafari = window.safari !== undefined
 
 if ('serviceWorker' in navigator) {
-  if (isSafari) { // if it's safari, disable current service workers and don't start a service worker.
+  if (isSafari) {
     navigator.serviceWorker.getRegistrations().then(function (registrations) {
       for (let registration of registrations) {
         registration.unregister()

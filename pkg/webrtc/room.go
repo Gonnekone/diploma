@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"sync"
-	"sync/atomic"
 	"v/internal/model"
 
 	"github.com/gofiber/websocket/v2"
@@ -13,7 +12,6 @@ import (
 	"github.com/pion/webrtc/v3"
 )
 
-// вместо 3 секунд — 200 мс
 const pcmBufferSize = model.SampleRate / 5
 
 func RoomConn(c *websocket.Conn, p *Peers) {
@@ -72,7 +70,6 @@ func RoomConn(c *websocket.Conn, p *Peers) {
 		case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
 			log.Printf("Peer connection closed/failed")
 			p.ListLock.Lock()
-			// Удаляем именно это соединение
 			for i := range p.Connections {
 				if p.Connections[i].PeerConnection == peerConnection {
 					p.Connections = append(p.Connections[:i], p.Connections[i+1:]...)
@@ -92,13 +89,11 @@ func RoomConn(c *websocket.Conn, p *Peers) {
 		}
 		defer p.RemoveTrack(trackLocal)
 
-		// аудиотрек обрабатываем через модель шумоподавления
-		//if t.Kind() == webrtc.RTPCodecTypeAudio {
-		//	go passthroughAudio(t, trackLocal)
-		//	return
-		//}
+		if t.Kind() == webrtc.RTPCodecTypeAudio {
+			go processAudioTrack(t, trackLocal)
+			return
+		}
 
-		// видеотрек — просто пересылаем без изменений
 		buf := make([]byte, 1500)
 		for {
 			i, _, err := t.Read(buf)
@@ -144,20 +139,14 @@ func RoomConn(c *websocket.Conn, p *Peers) {
 				log.Println(err)
 				return
 			}
-			//case "noise_toggle":
-			//	newPeer.NoiseEnabled.Store(message.Data == "true")
-			//	log.Printf("noise suppression: %s", message.Data)
 		}
 	}
 }
 
-// processAudioTrack читает RTP аудио, применяет шумоподавление и пишет в локальный трек
 func processAudioTrack(
 	remote *webrtc.TrackRemote,
 	local *webrtc.TrackLocalStaticRTP,
-	noiseEnabled *atomic.Bool,
 ) {
-	// инициализируем Opus декодер: 48кГц, моно
 	dec, err := opus.NewDecoder(model.SampleRate, 1)
 	if err != nil {
 		log.Printf("opus decoder init: %v — audio passthrough", err)
@@ -165,7 +154,6 @@ func processAudioTrack(
 		return
 	}
 
-	// инициализируем Opus энкодер: 48кГц, моно, VoIP режим
 	enc, err := opus.NewEncoder(model.SampleRate, 1, opus.AppVoIP)
 	if err != nil {
 		log.Printf("opus encoder init: %v — audio passthrough", err)
@@ -173,7 +161,6 @@ func processAudioTrack(
 		return
 	}
 
-	// загружаем модель шумоподавления
 	suppressor, err := model.NewSuppressor("noisecanceletionmodel/modeldata/noise_suppressor.onnx")
 	if err != nil {
 		log.Printf("noise suppressor init: %v — audio passthrough", err)
@@ -184,9 +171,7 @@ func processAudioTrack(
 
 	log.Println("noise suppressor active")
 
-	// PCM буфер для накопления 3 секунд аудио
 	pcmBuffer := make([]float32, 0, pcmBufferSize)
-	// декодированный фрейм: Opus обычно 20мс = 960 семплов при 48кГц
 	pcmFrame := make([]float32, 960)
 	rtpBuf := make([]byte, 1500)
 
@@ -196,7 +181,6 @@ func processAudioTrack(
 			return
 		}
 
-		// декодируем Opus → PCM
 		samplesDecoded, err := dec.DecodeFloat32(rtpBuf[:n], pcmFrame)
 		if err != nil {
 			log.Printf("opus decode: %v", err)
@@ -205,7 +189,6 @@ func processAudioTrack(
 
 		pcmBuffer = append(pcmBuffer, pcmFrame[:samplesDecoded]...)
 
-		// когда набрали 3 секунды — применяем шумоподавление
 		if len(pcmBuffer) < pcmBufferSize {
 			continue
 		}
@@ -214,20 +197,14 @@ func processAudioTrack(
 		copy(chunk, pcmBuffer[:pcmBufferSize])
 		pcmBuffer = pcmBuffer[pcmBufferSize:]
 
-		var denoised []float32
-		if noiseEnabled.Load() {
-			denoised, err = suppressor.Denoise(chunk)
-			if err != nil {
-				log.Printf("denoise: %v", err)
-				denoised = chunk // при ошибке отдаём исходный
-			}
-		} else {
-			denoised = chunk // просто пропускаем без обработки
+		denoised, err := suppressor.Denoise(chunk)
+		if err != nil {
+			log.Printf("denoise: %v", err)
+			denoised = chunk
 		}
 
-		// кодируем PCM обратно в Opus и пишем в локальный трек
 		encBuf := make([]byte, 1500)
-		frameSize := 960 // 20мс при 48кГц
+		frameSize := 960
 		for i := 0; i+frameSize <= len(denoised); i += frameSize {
 			encoded, err := enc.EncodeFloat32(denoised[i:i+frameSize], encBuf)
 			if err != nil {
@@ -241,7 +218,6 @@ func processAudioTrack(
 	}
 }
 
-// passthroughAudio — запасной вариант: просто пересылаем аудио без обработки
 func passthroughAudio(remote *webrtc.TrackRemote, local *webrtc.TrackLocalStaticRTP) {
 	buf := make([]byte, 1500)
 	for {

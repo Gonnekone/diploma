@@ -9,8 +9,6 @@ import (
 
 	guuid "github.com/google/uuid"
 
-	"sync/atomic"
-
 	"github.com/gofiber/websocket/v2"
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v3"
@@ -44,7 +42,6 @@ var (
 type PeerConnectionState struct {
 	PeerConnection *webrtc.PeerConnection
 	Websocket      *ThreadSafeWriter
-	NoiseEnabled   atomic.Bool // true по умолчанию
 }
 
 type Room struct {
@@ -56,7 +53,7 @@ type Peers struct {
 	ListLock    sync.RWMutex
 	Connections []PeerConnectionState
 	TrackLocals map[string]*webrtc.TrackLocalStaticRTP
-	Publishers  map[string]*webrtc.PeerConnection // trackLocal.ID() -> кто опубликовал
+	Publishers  map[string]*webrtc.PeerConnection
 }
 
 type ThreadSafeWriter struct {

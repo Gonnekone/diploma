@@ -11,10 +11,9 @@ const (
 	SampleRate  = 48000
 	FrameLength = 512
 	HopLength   = 128
-	FreqBins    = FrameLength/2 + 1 // 257
+	FreqBins    = FrameLength/2 + 1
 )
 
-// hannWindow возвращает окно Хэнна длиной n
 func hannWindow(n int) []float64 {
 	w := make([]float64, n)
 	for i := range w {
@@ -23,8 +22,6 @@ func hannWindow(n int) []float64 {
 	return w
 }
 
-// STFT — кратковременное преобразование Фурье
-// Принимает PCM float32, возвращает [T][FreqBins]complex128
 func STFT(samples []float32) [][]complex128 {
 	window := hannWindow(FrameLength)
 	numFrames := (len(samples)-FrameLength)/HopLength + 1
@@ -42,22 +39,18 @@ func STFT(samples []float32) [][]complex128 {
 			}
 		}
 		spectrum := fft.FFT(frame)
-		// берём только первую половину (FreqBins = N/2 + 1)
 		frames[t] = make([]complex128, FreqBins)
 		copy(frames[t], spectrum[:FreqBins])
 	}
 	return frames
 }
 
-// ISTFT — обратное STFT с overlap-add восстановлением
-// Принимает [T][FreqBins]complex128, возвращает PCM float32
 func ISTFT(frames [][]complex128, length int) []float32 {
 	window := hannWindow(FrameLength)
 	output := make([]float64, length)
 	windowSum := make([]float64, length)
 
 	for t, frame := range frames {
-		// восстанавливаем полный симметричный спектр для вещественного IFFT
 		full := make([]complex128, FrameLength)
 		copy(full, frame)
 		for i := 1; i < FrameLength/2; i++ {
@@ -73,7 +66,6 @@ func ISTFT(frames [][]complex128, length int) []float32 {
 		}
 	}
 
-	// нормализация через сумму окон (overlap-add)
 	result := make([]float32, length)
 	for i := range result {
 		if windowSum[i] > 1e-8 {
