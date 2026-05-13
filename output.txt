@@ -1683,20 +1683,6 @@ vc.158.160.8.131.sslip.io {
     let RoomWebsocketAddr = "{{.RoomWebsocketAddr}}"
     let ChatWebsocketAddr = "{{.ChatWebsocketAddr}}"
     let ViewerWebsocketAddr = "{{.ViewerWebsocketAddr}}"
-    let noiseEnabled = false;
-
-    function toggleNoise() {
-        const btn = document.getElementById('noiseBtn');
-        btn.style.background = noiseEnabled ? '#2ecc71' : '#e74c3c';
-        btn.textContent = noiseEnabled ? 'Шумоподавление: ВКЛ' : 'Шумоподавление: ВЫКЛ';
-
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({
-                event: 'noise_toggle',
-                data: noiseEnabled ? 'true' : 'false'
-            }));
-        }
-    }
 </script>
 <script src="/javascript/peer.js"></script>
 <script src="/javascript/chat.js"></script>
