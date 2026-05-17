@@ -5,6 +5,11 @@ DIR="${1:-$HOME/GolandProjects/Videocall-Chat-GO-Project}"
 OUTPUT="${2:-output.txt}"
 
 EXCLUDES=(
+    "views"
+    "assets"
+    "containers"
+    "noisecanceletionmodel"
+    "Makefile"
     "assets/font"
     "assets/icon.png"
     "go.sum"
