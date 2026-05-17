@@ -15,6 +15,7 @@ EXCLUDES=(
     "assets/font"
     "assets/icon.png"
     "go.sum"
+    "go.mod"
     ".git"
     "README.md"
     ".gitignore"
