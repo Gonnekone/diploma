@@ -29,7 +29,7 @@ var (
 			{URLs: []string{"stun:stun.l.google.com:19302"}},
 			{
 				URLs: []string{
-					"turn:158.160.8.131:3478?transport=udp",
+					"turn:89.169.168.220:3478?transport=udp",
 				},
 				Username:       "gonnekone",
 				Credential:     "gonnekone",

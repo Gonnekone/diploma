@@ -384,9 +384,922 @@ func Welcome(c *fiber.Ctx) error {
 # .gitattributes
 noisecanceletionmodel/modeldata/** filter=lfs diff=lfs merge=lfs -text
 
+# practice/benchmark/benchmark_test.go
+package benchmark
+
+import (
+	"testing"
+	"v/practice/livekit"
+	"v/practice/pion"
+
+	"github.com/pion/webrtc/v3"
+)
+
+func peerID(i int) string {
+	return "peer-" + string(rune('0'+i%10)) + string(rune('0'+(i/10)%10))
+}
+
+func BenchmarkPion_JoinParticipants(b *testing.B) {
+	server := pion.NewPionSFUServer()
+	server.CreateRoom("bench-room")
+
+	dummyOffer := webrtc.SessionDescription{
+		Type: webrtc.SDPTypeOffer,
+		SDP: `v=0
+o=- 1234567890 2 IN IP4 127.0.0.1
+s=-
+t=0 0
+a=ice-ufrag:testufrag
+a=ice-pwd:testpasswordtestpasswordtest
+a=fingerprint:sha-256 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF
+`,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		peerID := peerID(i)
+		_, err := server.AddPeerToRoom("bench-room", peerID, dummyOffer)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkLiveKit_JoinParticipants(b *testing.B) {
+	lk := livekit.NewLiveKitServer("https://my-livekit-host.com", "API_KEY", "API_SECRET")
+	lk.CreateRoom("bench-room-lk", 500)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		identity := peerID(i)
+		_, err := lk.GenerateToken("bench-room-lk", identity, "bench-user")
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkPion_PublishTrack(b *testing.B) {
+	server := pion.NewPionSFUServer()
+	server.CreateRoom("bench-room-track")
+
+	dummyOffer := webrtc.SessionDescription{
+		Type: webrtc.SDPTypeOffer,
+		SDP:  "v=0\r\no=- 1234567890 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n",
+	}
+
+	for i := 0; i < 50; i++ {
+		server.AddPeerToRoom("bench-room-track", peerID(i), dummyOffer)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		peerID := peerID(100 + i)
+		server.AddPeerToRoom("bench-room-track", peerID, dummyOffer)
+	}
+}
+
+func BenchmarkLiveKit_PublishTrack(b *testing.B) {
+	lk := livekit.NewLiveKitServer("https://your-livekit-host.com", "API_KEY", "API_SECRET")
+	lk.CreateRoom("bench-room-track-lk", 1000)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		identity := peerID(i)
+		if err := lk.SimulatePublishTrack("bench-room-track-lk", identity); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+//func BenchmarkPion_JoinAndPublish(b *testing.B) {
+//	server := pion.NewPionSFUServer()
+//	roomID := "bench-room-pion"
+//	server.CreateRoom(roomID)
+//
+//	dummyOffer := webrtc.SessionDescription{
+//		Type: webrtc.SDPTypeOffer,
+//		SDP: `v=0
+//o=- 1234567890 2 IN IP4 127.0.0.1
+//s=-
+//t=0 0
+//a=ice-ufrag:testufrag
+//a=ice-pwd:testpasswordtestpasswordtest
+//a=fingerprint:sha-256 00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF
+//`,
+//	}
+//
+//	b.ResetTimer()
+//	for i := 0; i < b.N; i++ {
+//		var wg sync.WaitGroup
+//		wg.Add(1) // Для одной горутины на итерацию; можно увеличить для симуляции нескольких пиров
+//
+//		go func(i int) {
+//			defer wg.Done()
+//
+//			peerID := peerID(i)
+//
+//			// Подключение (join)
+//			_, err := server.AddPeerToRoom(roomID, peerID, dummyOffer)
+//			if err != nil {
+//				b.Fatal(err)
+//			}
+//
+//			// Симуляция публикации трека
+//			room, _ := server.GetRoom(roomID)
+//			trackLocal, err := webrtc.NewTrackLocalStaticRTP(
+//				webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8},
+//				"video", "pion-bench",
+//			)
+//			if err != nil {
+//				b.Fatal(err)
+//			}
+//
+//			room.PeersLock.Lock()
+//			room.TrackLocals[peerID] = append(room.TrackLocals[peerID], trackLocal)
+//			room.PeersLock.Unlock()
+//
+//			// Симуляция отправки 50 RTP-пакетов (без sleep, просто цикл)
+//			for j := 0; j < 50; j++ {
+//				pkt := &rtp.Packet{
+//					Header: rtp.Header{
+//						Version:        2,
+//						SSRC:           uint32(i),
+//						SequenceNumber: uint16(j),
+//					},
+//					Payload: []byte{0x00, 0x01, 0x02}, // Dummy payload
+//				}
+//				if err := trackLocal.WriteRTP(pkt); err != nil {
+//					b.Fatal(err)
+//				}
+//			}
+//
+//			// Симуляция ретрансляции (forwardTrack)
+//			server.ForwardTrack(room, peerID, trackLocal)
+//		}(i)
+//
+//		wg.Wait() // Ждём завершения всех операций в итерации
+//	}
+//}
+//
+//func BenchmarkLiveKit_JoinAndPublish(b *testing.B) {
+//	lkHost := "http://localhost:7880" // Или ваш реальный хост
+//	apiKey := "devkey"
+//	apiSecret := "secret"
+//	lk := livekit.NewLiveKitServer(lkHost, apiKey, apiSecret)
+//	roomName := "bench-room-livekit"
+//	_, _ = lk.CreateRoom(roomName, 1000) // Если нужно; иначе комната создаётся автоматически
+//
+//	b.ResetTimer()
+//	for i := 0; i < b.N; i++ {
+//		var wg sync.WaitGroup
+//		wg.Add(1) // Для одной горутины; можно увеличить
+//
+//		go func(i int) {
+//			defer wg.Done()
+//
+//			identity := peerID(i)
+//
+//			// Подключение (join via token)
+//			token, err := lk.GenerateToken(roomName, identity, identity)
+//			if err != nil {
+//				b.Fatal(err)
+//			}
+//			_ = token // Симуляция использования токена для join (в реальности — через client SDK)
+//
+//			// Симуляция создания PeerConnection и трека (как в вашем коде)
+//			m := &webrtc.MediaEngine{}
+//			if err := m.RegisterDefaultCodecs(); err != nil {
+//				b.Fatal(err)
+//			}
+//			api := webrtc.NewAPI(webrtc.WithMediaEngine(m))
+//			pc, err := api.NewPeerConnection(webrtc.Configuration{})
+//			if err != nil {
+//				b.Fatal(err)
+//			}
+//
+//			track, err := webrtc.NewTrackLocalStaticRTP(
+//				webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8},
+//				"video", "livekit",
+//			)
+//			if err != nil {
+//				b.Fatal(err)
+//			}
+//			_, err = pc.AddTrack(track)
+//			if err != nil {
+//				b.Fatal(err)
+//			}
+//
+//			// Симуляция отправки 50 RTP-пакетов (без sleep)
+//			for j := 0; j < 50; j++ {
+//				err := track.WriteRTP(&rtp.Packet{
+//					Header:  rtp.Header{Version: 2, SSRC: uint32(i), SequenceNumber: uint16(j)},
+//					Payload: []byte{0x00, 0x01, 0x02},
+//				})
+//				if err != nil {
+//					b.Fatal(err)
+//				}
+//			}
+//
+//			pc.Close()
+//		}(i)
+//
+//		wg.Wait()
+//	}
+//}
+
+# practice/.DS_Store
+
+
+
+
+# practice/publisher/publisher.go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"math/rand"
+	"time"
+
+	"github.com/livekit/protocol/auth"
+	"github.com/livekit/protocol/livekit"
+	lksdk "github.com/livekit/server-sdk-go/v2"
+)
+
+func main() {
+	rand.Seed(time.Now().UnixNano())
+
+	host := "http://localhost:7880"
+	apiKey := "devkey"
+	apiSecret := "secret"
+
+	// Создаём RoomServiceClient
+	roomClient := lksdk.NewRoomServiceClient(host, apiKey, apiSecret)
+
+	// Создаём комнату
+	roomName := "bench-room"
+	_, err := roomClient.CreateRoom(context.Background(), &livekit.CreateRoomRequest{
+		Name:            roomName,
+		EmptyTimeout:    0,
+		MaxParticipants: 1000,
+	})
+	if err != nil {
+		log.Printf("Room may already exist: %v", err)
+	} else {
+		log.Printf("Room %s created", roomName)
+	}
+
+	participants := 10 // сколько "виртуальных участников"
+	for i := 0; i < participants; i++ {
+		go func(i int) {
+			identity := fmt.Sprintf("user-%d", i)
+			token := generateToken(apiKey, apiSecret, roomName, identity)
+
+			// В Go нет полноценного headless WebRTC, но мы можем эмулировать publish
+			log.Printf("[%s] Simulating publish track...", identity)
+
+			// Используем LiveKit server SDK метод для генерации
+			// токена и публикации без реального медиапотока
+			_ = token
+			time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
+			log.Printf("[%s] Track published (simulated)", identity)
+		}(i)
+	}
+
+	// Ждём пока все "участники" отработают
+	time.Sleep(5 * time.Second)
+}
+
+// Генерация токена для участника
+func generateToken(apiKey, apiSecret, roomName, identity string) string {
+	at := auth.NewAccessToken(apiKey, apiSecret)
+	grant := &auth.VideoGrant{
+		RoomJoin: true,
+		Room:     roomName,
+	}
+	at.SetVideoGrant(grant).SetIdentity(identity).SetName(identity).SetValidFor(time.Hour)
+	jwt, err := at.ToJWT()
+	if err != nil {
+		log.Fatalf("Failed to generate token: %v", err)
+	}
+	return jwt
+}
+
+# practice/common/signaling.go
+package common
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+type JoinPayload struct {
+	DisplayName string            `json:"display_name"`
+	Role        string            `json:"role"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+}
+
+type RoomInfo struct {
+	ID           string            `json:"id"`
+	Participants []ParticipantInfo `json:"participants"`
+	CreatedAt    time.Time         `json:"created_at"`
+}
+
+type ParticipantInfo struct {
+	ID          string            `json:"id"`
+	DisplayName string            `json:"display_name"`
+	Role        string            `json:"role"`
+	JoinedAt    time.Time         `json:"joined_at"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+}
+
+type SignalingServer struct {
+	upgrader     websocket.Upgrader
+	connections  map[string]*websocket.Conn
+	rooms        map[string]*RoomInfo
+	participants map[string]*ParticipantInfo // participantID -> ParticipantInfo
+	mu           sync.RWMutex
+}
+
+func NewSignalingServer() *SignalingServer {
+	return &SignalingServer{
+		upgrader: websocket.Upgrader{
+			CheckOrigin: func(r *http.Request) bool { return true },
+		},
+		connections:  make(map[string]*websocket.Conn),
+		rooms:        make(map[string]*RoomInfo),
+		participants: make(map[string]*ParticipantInfo),
+	}
+}
+
+func (s *SignalingServer) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
+	conn, err := s.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	peerID := r.URL.Query().Get("peer_id")
+	roomID := r.URL.Query().Get("room_id")
+
+	if peerID == "" {
+		peerID = fmt.Sprintf("peer-%d", time.Now().UnixNano())
+	}
+
+	s.mu.Lock()
+	s.connections[peerID] = conn
+	s.mu.Unlock()
+
+	log.Printf("New WebSocket connection: %s, room: %s", peerID, roomID)
+
+	conn.WriteJSON(SignalingMessage{
+		Type:    "connected",
+		From:    "server",
+		To:      peerID,
+		Payload: json.RawMessage(fmt.Sprintf(`{"peer_id": "%s"}`, peerID)),
+	})
+
+	defer func() {
+		s.handleLeave(peerID, roomID)
+		s.mu.Lock()
+		delete(s.connections, peerID)
+		delete(s.participants, peerID)
+		s.mu.Unlock()
+		conn.Close()
+		log.Printf("WebSocket closed: %s", peerID)
+	}()
+
+	for {
+		var msg SignalingMessage
+		err := conn.ReadJSON(&msg)
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Printf("WebSocket error: %v", err)
+			}
+			break
+		}
+
+		if msg.From == "" {
+			msg.From = peerID
+		}
+
+		log.Printf("Received message from %s: type=%s, to=%s", msg.From, msg.Type, msg.To)
+
+		switch msg.Type {
+		case "offer", "answer", "candidate":
+			s.relayMessage(msg)
+		case "join":
+			s.handleJoin(peerID, msg)
+		case "leave":
+			s.handleLeave(peerID, roomID)
+		case "ping":
+			conn.WriteJSON(SignalingMessage{
+				Type: "pong",
+				From: "server",
+				To:   peerID,
+			})
+		case "list_participants":
+			s.handleListParticipants(peerID, roomID)
+		case "room_info":
+			s.handleRoomInfo(peerID, roomID)
+		default:
+			log.Printf("Unknown message type: %s", msg.Type)
+		}
+	}
+}
+
+func (s *SignalingServer) handleJoin(peerID string, msg SignalingMessage) {
+	var payload JoinPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		log.Printf("Failed to parse join payload: %v", err)
+		return
+	}
+
+	roomID := msg.RoomID
+	if roomID == "" {
+		log.Printf("Room ID is required for join")
+		return
+	}
+
+	participant := &ParticipantInfo{
+		ID:          peerID,
+		DisplayName: payload.DisplayName,
+		Role:        payload.Role,
+		JoinedAt:    time.Now(),
+		Metadata:    payload.Metadata,
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	room, exists := s.rooms[roomID]
+	if !exists {
+		room = &RoomInfo{
+			ID:           roomID,
+			Participants: []ParticipantInfo{},
+			CreatedAt:    time.Now(),
+		}
+		s.rooms[roomID] = room
+		log.Printf("Created new room: %s", roomID)
+	}
+
+	room.Participants = append(room.Participants, *participant)
+	s.participants[peerID] = participant
+
+	if conn, ok := s.connections[peerID]; ok {
+		conn.WriteJSON(SignalingMessage{
+			Type:   "joined",
+			From:   "server",
+			To:     peerID,
+			RoomID: roomID,
+			Payload: json.RawMessage(fmt.Sprintf(
+				`{"room_id": "%s", "participant_id": "%s", "display_name": "%s"}`,
+				roomID, peerID, payload.DisplayName,
+			)),
+		})
+	}
+
+	s.broadcastToRoom(roomID, peerID, SignalingMessage{
+		Type:   "participant_joined",
+		From:   "server",
+		RoomID: roomID,
+		Payload: json.RawMessage(fmt.Sprintf(
+			`{"participant_id": "%s", "display_name": "%s", "role": "%s"}`,
+			peerID, payload.DisplayName, payload.Role,
+		)),
+	})
+
+	log.Printf("Participant %s joined room %s as %s", peerID, roomID, payload.Role)
+}
+
+func (s *SignalingServer) handleLeave(peerID, roomID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if room, exists := s.rooms[roomID]; exists {
+		for i, participant := range room.Participants {
+			if participant.ID == peerID {
+				room.Participants = append(room.Participants[:i], room.Participants[i+1:]...)
+				log.Printf("Removed participant %s from room %s", peerID, roomID)
+
+				if len(room.Participants) == 0 {
+					delete(s.rooms, roomID)
+					log.Printf("Room %s deleted (no participants)", roomID)
+				}
+				break
+			}
+		}
+
+		s.broadcastToRoom(roomID, peerID, SignalingMessage{
+			Type:   "participant_left",
+			From:   "server",
+			RoomID: roomID,
+			Payload: json.RawMessage(fmt.Sprintf(
+				`{"participant_id": "%s"}`,
+				peerID,
+			)),
+		})
+	}
+
+	delete(s.participants, peerID)
+	log.Printf("Participant %s left room %s", peerID, roomID)
+}
+
+func (s *SignalingServer) handleListParticipants(peerID, roomID string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if room, exists := s.rooms[roomID]; exists {
+		participantsJSON, _ := json.Marshal(room.Participants)
+
+		if conn, ok := s.connections[peerID]; ok {
+			conn.WriteJSON(SignalingMessage{
+				Type:   "participants_list",
+				From:   "server",
+				To:     peerID,
+				RoomID: roomID,
+				Payload: json.RawMessage(fmt.Sprintf(
+					`{"participants": %s}`,
+					string(participantsJSON),
+				)),
+			})
+		}
+	}
+}
+
+func (s *SignalingServer) handleRoomInfo(peerID, roomID string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if room, exists := s.rooms[roomID]; exists {
+		roomInfoJSON, _ := json.Marshal(room)
+
+		if conn, ok := s.connections[peerID]; ok {
+			conn.WriteJSON(SignalingMessage{
+				Type:   "room_info",
+				From:   "server",
+				To:     peerID,
+				RoomID: roomID,
+				Payload: json.RawMessage(fmt.Sprintf(
+					`{"room": %s}`,
+					string(roomInfoJSON),
+				)),
+			})
+		}
+	}
+}
+
+func (s *SignalingServer) broadcastToRoom(roomID, excludePeerID string, msg SignalingMessage) {
+	if room, exists := s.rooms[roomID]; exists {
+		for _, participant := range room.Participants {
+			if participant.ID != excludePeerID {
+				if conn, ok := s.connections[participant.ID]; ok {
+					conn.WriteJSON(msg)
+				}
+			}
+		}
+	}
+}
+
+func (s *SignalingServer) relayMessage(msg SignalingMessage) {
+	if msg.To == "" {
+		log.Printf("Message has no recipient: %+v", msg)
+		return
+	}
+
+	s.mu.RLock()
+	conn, exists := s.connections[msg.To]
+	s.mu.RUnlock()
+
+	if exists {
+		if err := conn.WriteJSON(msg); err != nil {
+			log.Printf("Failed to relay message to %s: %v", msg.To, err)
+		} else {
+			log.Printf("Relayed message from %s to %s: type=%s",
+				msg.From, msg.To, msg.Type)
+		}
+	} else {
+		log.Printf("Recipient not found: %s", msg.To)
+	}
+}
+
+func (s *SignalingServer) GetRoomStats() map[string]int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	stats := make(map[string]int)
+	for roomID, room := range s.rooms {
+		stats[roomID] = len(room.Participants)
+	}
+	return stats
+}
+
+func (s *SignalingServer) CloseAllConnections() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for peerID, conn := range s.connections {
+		conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseGoingAway, "Server shutdown"),
+			time.Now().Add(5*time.Second))
+		conn.Close()
+		delete(s.connections, peerID)
+	}
+
+	s.rooms = make(map[string]*RoomInfo)
+	s.participants = make(map[string]*ParticipantInfo)
+}
+
+# practice/common/types.go
+package common
+
+import "encoding/json"
+
+type Room struct {
+	ID        string
+	Clients   map[string]*Client
+	Broadcast chan []byte
+}
+
+type Client struct {
+	ID       string
+	RoomID   string
+	Send     chan []byte
+	Metadata map[string]interface{}
+}
+
+type SignalingMessage struct {
+	Type    string          `json:"type"`
+	From    string          `json:"from,omitempty"`
+	To      string          `json:"to,omitempty"`
+	RoomID  string          `json:"room_id,omitempty"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+}
+
+# practice/livekit/server.go
+package livekit
+
+import (
+	"context"
+	"time"
+
+	"github.com/livekit/protocol/auth"
+	"github.com/livekit/protocol/livekit"
+	lksdk "github.com/livekit/server-sdk-go/v2"
+)
+
+type Server struct {
+	host       string
+	apiKey     string
+	apiSecret  string
+	roomClient *lksdk.RoomServiceClient
+}
+
+func NewLiveKitServer(host, apiKey, apiSecret string) *Server {
+	return &Server{
+		host:       host,
+		apiKey:     apiKey,
+		apiSecret:  apiSecret,
+		roomClient: lksdk.NewRoomServiceClient(host, apiKey, apiSecret),
+	}
+}
+
+func (s *Server) CreateRoom(roomName string, maxParticipants int32) (*livekit.Room, error) {
+	room, err := s.roomClient.CreateRoom(
+		context.Background(),
+		&livekit.CreateRoomRequest{
+			Name:            roomName,
+			EmptyTimeout:    300,
+			MaxParticipants: uint32(maxParticipants),
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return room, nil
+}
+
+func (s *Server) GenerateToken(roomName, identity, participantName string) (string, error) {
+	at := auth.NewAccessToken(s.apiKey, s.apiSecret)
+
+	grant := &auth.VideoGrant{
+		RoomJoin: true,
+		Room:     roomName,
+	}
+
+	at.SetVideoGrant(grant).
+		SetIdentity(identity).
+		SetName(participantName).
+		SetValidFor(24 * time.Hour)
+
+	return at.ToJWT()
+}
+
+func (s *Server) SimulatePublishTrack(roomName, identity string) error {
+	_, err := s.GenerateToken(roomName, identity, "bench-user")
+	return err
+}
+
+# practice/pion/server.go
+package pion
+
+import (
+	"errors"
+	"sync"
+
+	"github.com/pion/webrtc/v3"
+)
+
+var ErrRoomNotFound = errors.New("room not found")
+
+type SFUServer struct {
+	rooms     map[string]*Room
+	roomsLock sync.RWMutex
+	api       *webrtc.API
+}
+
+type Room struct {
+	id          string
+	peers       map[string]*Peer
+	PeersLock   sync.RWMutex
+	TrackLocals map[string][]*webrtc.TrackLocalStaticRTP // peerID -> tracks
+}
+
+type Peer struct {
+	id string
+	pc *webrtc.PeerConnection
+}
+
+func NewPionSFUServer() *SFUServer {
+	m := &webrtc.MediaEngine{}
+	if err := m.RegisterDefaultCodecs(); err != nil {
+		panic(err)
+	}
+
+	settingEngine := webrtc.SettingEngine{}
+	settingEngine.DetachDataChannels()
+
+	api := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithSettingEngine(settingEngine))
+
+	return &SFUServer{
+		rooms: make(map[string]*Room),
+		api:   api,
+	}
+}
+
+func (s *SFUServer) CreateRoom(roomID string) {
+	s.roomsLock.Lock()
+	defer s.roomsLock.Unlock()
+
+	if _, exists := s.rooms[roomID]; exists {
+		return
+	}
+
+	s.rooms[roomID] = &Room{
+		id:          roomID,
+		peers:       make(map[string]*Peer),
+		TrackLocals: make(map[string][]*webrtc.TrackLocalStaticRTP),
+	}
+}
+
+func (s *SFUServer) GetRoom(roomID string) (*Room, bool) {
+	s.roomsLock.RLock()
+	defer s.roomsLock.RUnlock()
+	r, ok := s.rooms[roomID]
+	return r, ok
+}
+
+func (s *SFUServer) AddPeerToRoom(roomID, peerID string, offer webrtc.SessionDescription) (webrtc.SessionDescription, error) {
+	room, exists := s.GetRoom(roomID)
+	if !exists {
+		return webrtc.SessionDescription{}, ErrRoomNotFound
+	}
+
+	config := webrtc.Configuration{
+		ICEServers: []webrtc.ICEServer{
+			{URLs: []string{"stun:stun.l.google.com:19302"}},
+		},
+	}
+
+	pc, err := s.api.NewPeerConnection(config)
+	if err != nil {
+		return webrtc.SessionDescription{}, err
+	}
+
+	pc.OnTrack(func(trackRemote *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
+		trackLocal, err := webrtc.NewTrackLocalStaticRTP(trackRemote.Codec().RTPCodecCapability, trackRemote.ID(), trackRemote.StreamID())
+		if err != nil {
+			return
+		}
+
+		room.PeersLock.Lock()
+		room.TrackLocals[peerID] = append(room.TrackLocals[peerID], trackLocal)
+		room.PeersLock.Unlock()
+
+		s.ForwardTrack(room, peerID, trackLocal)
+
+		go func() {
+			for {
+				pkt, _, err := trackRemote.ReadRTP()
+				if err != nil {
+					return
+				}
+				trackLocal.WriteRTP(pkt)
+			}
+		}()
+	})
+
+	room.PeersLock.RLock()
+	for otherID, tracks := range room.TrackLocals {
+		if otherID == peerID {
+			continue
+		}
+		for _, track := range tracks {
+			pc.AddTrack(track)
+		}
+	}
+	room.PeersLock.RUnlock()
+
+	if err := pc.SetRemoteDescription(offer); err != nil {
+		pc.Close()
+		return webrtc.SessionDescription{}, err
+	}
+
+	answer, err := pc.CreateAnswer(nil)
+	if err != nil {
+		pc.Close()
+		return webrtc.SessionDescription{}, err
+	}
+
+	if err := pc.SetLocalDescription(answer); err != nil {
+		pc.Close()
+		return webrtc.SessionDescription{}, err
+	}
+
+	room.PeersLock.Lock()
+	room.peers[peerID] = &Peer{id: peerID, pc: pc}
+	room.PeersLock.Unlock()
+
+	return answer, nil
+}
+
+func (s *SFUServer) ForwardTrack(room *Room, senderID string, track *webrtc.TrackLocalStaticRTP) {
+	room.PeersLock.RLock()
+	defer room.PeersLock.RUnlock()
+
+	for peerID, peer := range room.peers {
+		if peerID == senderID {
+			continue
+		}
+		peer.pc.AddTrack(track)
+	}
+}
+
+# practice/main.go
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"v/practice/livekit"
+)
+
+var lk = livekit.NewLiveKitServer(
+	"http://localhost:7880",
+	"devkey",
+	"secret",
+)
+
+func main() {
+	http.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		room := r.URL.Query().Get("room")
+		identity := r.URL.Query().Get("identity")
+
+		token, err := lk.GenerateToken(room, identity, identity)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]string{
+			"token": token,
+		})
+	})
+
+	http.ListenAndServe(":3000", nil)
+}
+
 # pkg/.DS_Store
 
-�
+�
 
 # pkg/chat/hub.go
 package chat
@@ -679,7 +1592,7 @@ var (
 			{URLs: []string{"stun:stun.l.google.com:19302"}},
 			{
 				URLs: []string{
-					"turn:158.160.8.131:3478?transport=udp",
+					"turn:89.169.168.220:3478?transport=udp",
 				},
 				Username:       "gonnekone",
 				Credential:     "gonnekone",

@@ -26,7 +26,6 @@ EXCLUDES=(
     ".idea"
     "collector.sh"
     ".venv"
-    "practice"
     "noisecanceletionmodel/data"
     "noisecanceletionmodel/venv"
     "noisecanceletionmodel/speech-noise-dataset.zip"

@@ -15,10 +15,10 @@ services:
     restart: unless-stopped
     network_mode: host
     command: [
-      "-public-ip", "158.160.8.131",
+      "-public-ip", "89.169.168.220",
       "-port", "3478",
       "-users", "gonnekone=gonnekone",
-      "-realm", "vc.158.160.8.131.sslip.io"
+      "-realm", "vc.89.169.168.220.sslip.io"
     ]
 
   caddy:
